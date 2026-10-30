@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Flightmon">
+  <meta name="theme-color" content="#05080b">
+  <title>Flightmon</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="radar-wrap">
+      <canvas id="radar"></canvas>
+      <div id="status" class="corner top-left"></div>
+      <div class="corner top-right buttons">
+        <button id="btn-zoom-out" type="button" aria-label="Wider range">&minus;</button>
+        <button id="btn-zoom-in" type="button" aria-label="Closer range">+</button>
+        <button id="btn-fullscreen" type="button" aria-label="Full screen">&#x26F6;</button>
+        <button id="btn-settings" type="button" aria-label="Settings">&#x2699;</button>
+      </div>
+      <div id="legend" class="corner bottom-left"></div>
+      <div id="attribution" class="corner bottom-right"></div>
+    </div>
+
+    <aside id="side">
+      <section id="clock">
+        <div class="time"><span id="clock-time">--:--</span><span id="clock-sec"></span></div>
+        <div id="clock-date" class="muted"></div>
+      </section>
+      <section id="weather" class="is-hidden"></section>
+      <section id="detail" class="is-hidden"></section>
+      <section id="nearby">
+        <h2><span>Nearby</span> <span id="nearby-count" class="muted"></span></h2>
+        <ul id="list"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <div id="settings" class="overlay is-hidden">
+    <form id="settings-form" class="panel" autocomplete="off">
+      <h2>Settings</h2>
+      <div class="row two">
+        <label>Latitude <input name="lat" type="text" inputmode="decimal" placeholder="55.6761"></label>
+        <label>Longitude <input name="lon" type="text" inputmode="decimal" placeholder="12.5683"></label>
+      </div>
+      <div class="row">
+        <button id="btn-locate" type="button" class="secondary">Use my location</button>
+        <span id="locate-msg" class="muted small"></span>
+      </div>
+      <div class="row two">
+        <label>Range <select name="radius"></select></label>
+        <label>Units
+          <select name="units">
+            <option value="aviation">Aviation (ft, kt, nm)</option>
+            <option value="metric">Metric (m, km/h, km)</option>
+            <option value="imperial">Imperial (ft, mph, mi)</option>
+          </select>
+        </label>
+      </div>
+      <div class="row two">
+        <label>Map
+          <select name="basemap">
+            <option value="dark">Dark map</option>
+            <option value="none">No map</option>
+          </select>
+        </label>
+        <label>Refresh
+          <select name="refresh">
+            <option value="3">Every 3 s</option>
+            <option value="5">Every 5 s</option>
+            <option value="10">Every 10 s</option>
+            <option value="20">Every 20 s</option>
+          </select>
+        </label>
+      </div>
+      <div class="row checks">
+        <label><input name="sweep" type="checkbox"> Radar sweep</label>
+        <label><input name="labels" type="checkbox"> Labels</label>
+        <label><input name="trails" type="checkbox"> Trails</label>
+        <label><input name="clock24" type="checkbox"> 24-hour clock</label>
+        <label><input name="demo" type="checkbox"> Demo traffic</label>
+      </div>
+      <p class="muted small">Settings are kept on this device. You can also set them in the
+        address, e.g. <code>?lat=55.68&amp;lon=12.57&amp;radius=25</code>, which is handy for an iPad.</p>
+      <div class="row actions">
+        <button type="button" id="btn-cancel" class="secondary">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
