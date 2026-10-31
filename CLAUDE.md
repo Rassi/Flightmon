@@ -4,9 +4,15 @@
 
 - Commit and push directly to `main`, even when a session is assigned its
   own branch. No feature branches or pull requests unless asked for.
-- `main` is meant to deploy to Cloudflare on every push, so run `npm test`
-  before pushing, and for page changes also check the page in the
-  pre-installed headless Chromium against `npm run dev`.
+- Run `npm test` before pushing, and for page changes also check the page in
+  the pre-installed headless Chromium against `npm run dev`.
+
+## Deploying
+
+Not deployed yet. Develop and verify against the local Worker
+(`npm run dev`, i.e. `wrangler dev`) until the user is satisfied; the user
+decides when to deploy to Cloudflare. Don't deploy or set up Cloudflare
+until asked.
 
 ## Rules
 
