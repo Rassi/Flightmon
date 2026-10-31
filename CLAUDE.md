@@ -1,11 +1,17 @@
 # Flightmon
 
+Read `docs/notes.md` first: decisions, what we've found out about each data
+source, reference projects, the feature backlog and open questions. Whenever
+something is learned or decided, add it there (with the date) in the same
+commit.
+
 ## Git
 
 - Commit and push directly to `main`, even when a session is assigned its
   own branch. No feature branches or pull requests unless asked for.
-- Run `npm test` before pushing, and for page changes also check the page in
-  the pre-installed headless Chromium against `npm run dev`.
+- Run `npm test` before pushing. For page changes, also run the browser
+  check against `npm run dev` and look at its screenshots:
+  `NODE_PATH=$(npm root -g) node scripts/browser-check.cjs <dir>`.
 
 ## Deploying
 
@@ -21,15 +27,12 @@ until asked.
 - Inspired by FlightScnr_Pi (CC BY-NC-SA): take ideas only, no code or images.
 - Target is a browser on a laptop. Keep it minimal; routes, photos, weather
   etc. only when asked for.
+- Prefer free dependencies that need no API key.
 - Units are metric (m, km, km/h).
 
-## Things learned
+## Gotchas when changing code
 
-- adsb.lol and adsb.fi send no CORS headers, hence the Worker in `src/`.
-  airplanes.live requires contacting them first; planespotters.net rejects
-  generic User-Agents.
-- Map tiles: CARTO and tile.openstreetmap.org answer 200 with a placeholder
-  image ("API KEY REQUIRED" / "Access blocked"), so look at a tile, not just
-  the status. Esri World Street Map works without a key (retires Dec 2029).
 - Workers treat every named export of `src/worker.js` as an entrypoint and
   refuse anything that isn't a handler, so keep that file to a default export.
+- A tile server can answer 200 with a placeholder image: look at a tile, not
+  just the status.
