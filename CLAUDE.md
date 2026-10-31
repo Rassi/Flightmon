@@ -24,8 +24,8 @@ until asked.
 
 ## Rules
 
-- Don't build anything that can't be verified. If a feed or service can't be
-  reached, say why rather than working around it.
+- If a feed or service refuses or can't be reached, say why rather than
+  working around it (e.g. no browser-like User-Agents).
 - Inspired by FlightScnr_Pi (CC BY-NC-SA): take ideas only, no code or images.
 - Target is a browser on a laptop. Keep it minimal; routes, photos, weather
   etc. only when asked for.

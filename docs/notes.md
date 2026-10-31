@@ -16,7 +16,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | Date | Decision |
 | --- | --- |
 | 2026-10-30 | Target: a browser on a laptop. Old iPads out of scope for now. Start minimal: location, aircraft every few seconds, radar (rings + planes), list sorted by distance. Routes, photos, weather etc. later, only if wanted. |
-| 2026-10-30 | Rule: don't build anything that can't be verified. When a service refuses, report why; don't work around it (no browser-spoofing User-Agents etc.). |
+| 2026-10-30 | Rule: don't build anything that can't be verified (retired 2026-10-31, see below). When a service refuses, report why; don't work around it (no browser-spoofing User-Agents etc.). |
 | 2026-10-30 | FlightScnr / FlightScnr_Pi (CC BY-NC-SA): take ideas only, no code or images. |
 | 2026-10-30 | "No server" isn't possible (feeds lack CORS, see below). User has a Cloudflare account → a Cloudflare Worker serves the page and `/api/aircraft`. |
 | 2026-10-31 | The original sketch (Node proxy + ES5 page for iPads) was replaced entirely. Modern JS, no build step. |
@@ -35,6 +35,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Destination line on the radar: started, then dropped. The user meant the path already flown, not a line to the destination. |
 | 2026-10-31 | Path flown (user chose "option 3"): for the **selected** aircraft only (like ADS-B Exchange's default), a line in altitude colours. Our own recording of every aircraft's positions since the page opened (kept 2 h), plus OpenSky's track for the earlier part of the flight, fetched via the Worker (`/api/track`) on click and cached for the page. If OpenSky fails, the card says so and shows the recorded part. **The OpenSky part is committed but unverified**: the user chose to keep it and test it on the laptop (card says "(OpenSky)" if it works); if it doesn't work there, remove it. Times shown on a 24-hour clock regardless of browser language. |
 | 2026-10-31 | Aircraft icons: our own canvas silhouettes (not FlightScnr_Pi's images), chosen from the ADS-B emitter category plus short lists of turboprop, helicopter and wide-body type codes. Not animated: the user didn't want moving parts (FlightScnr_Pi spins helicopter rotors). No category and no listed type: a plain arrow rather than a guess. |
+| 2026-10-31 | Retired the "don't build anything that can't be verified" rule: it was for the first iterations, before we knew where things would run. Still test and check what can be checked; the "don't work around refusals" rule stays. |
 
 ## Data sources: what we found
 
