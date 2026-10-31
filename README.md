@@ -27,6 +27,12 @@ Inspired by [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi)
   colours: recorded by the page since it opened, with the earlier part of the
   flight from [OpenSky](https://opensky-network.org) when available (see the
   notes: not yet verified).
+- **Clock and weather**: the time at the radar's location (and UTC), and the
+  current weather there from [Open-Meteo](https://open-meteo.com/): sky,
+  temperature, wind, visibility and pressure, updated every 15 minutes.
+- **Rain radar**: the latest rain radar image from
+  [RainViewer](https://www.rainviewer.com/) over the map, with its time; the
+  *Rain* button turns it on and off (remembered in the browser).
 - **Units**: metric (m, km/h, km).
 
 ## How it works
@@ -51,6 +57,9 @@ public/mercator.js  map projection
 public/basemap.js   map tiles
 public/details.js   the details card, adsbdb lookups
 public/trails.js    recording where aircraft have flown
+public/weather.js   clock and weather (Open-Meteo)
+public/rain.js      rain radar overlay (RainViewer)
+public/tiles.js     drawing map tiles (shared by the map and the rain)
 src/track.js        /api/track: OpenSky's path so far
 public/geo.js       distance and bearing (shared with the Worker)
 ```
@@ -68,6 +77,15 @@ which the browser asks directly (it allows that), only when an aircraft is
 clicked. Its route data is by David J Taylor (Edinburgh) and Jim Mason and
 may not be copied, published or put into other databases, so the page only
 shows it and keeps it in memory while open; aircraft data is from PlaneBase.
+
+Weather comes from [Open-Meteo](https://open-meteo.com/) (free for
+non-commercial use, no key, CC BY 4.0) and rain from
+[RainViewer](https://www.rainviewer.com/api.html) (free for personal and
+educational use, no key). The browser asks both directly; both are credited
+under the radar. RainViewer's free images stop at zoom level 7 (about 1 km per
+pixel), so rain looks soft when zoomed in, and only places covered by weather
+radars have it. The weather values are model data for the location, updated
+every 15 minutes, not station observations.
 
 Altitudes are pressure altitudes, as the feeds report them, so a plane close to
 the ground can show a few metres below zero on a high-pressure day. Airport

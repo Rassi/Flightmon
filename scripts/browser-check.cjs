@@ -9,7 +9,9 @@
 // Checks: list = API response, each aircraft drawn at its expected pixel
 // (Web Mercator computed independently of public/mercator.js), map tiles load,
 // refresh, hover highlight, "use my location", reload/localStorage, invalid
-// input, feed failure, phone width, no console errors. Screenshots go to the
+// input, feed failure, phone width, no console errors; clock in the location's
+// time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
+// exactly (checked with a synthetic tile) and the rain on/off switch. Screenshots go to the
 // given directory (default: the system temp dir); look at them too: a tile
 // server can answer 200 with a placeholder image.
 
@@ -45,6 +47,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     if (/api\.adsbdb\.com/.test(m.location().url) && /status of 40[04]/.test(m.text())) return;
     // /api/track answers 404/429/502 when OpenSky has no track or fails; the card says so.
     if (/\/api\/track\?/.test(m.location().url) && /status of (404|429|502)/.test(m.text())) return;
+    // Open-Meteo's 429 (daily limit; this container shares its IP) is shown on the page.
+    if (/api\.open-meteo\.com/.test(m.location().url) && /status of 429/.test(m.text())) return;
     errors.push(`${m.text()} (${m.location().url})`);
   });
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -54,6 +58,14 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   page.on('response', (r) => { if (r.url().includes('arcgisonline.com')) { if (r.status() === 200 && /image\//.test(r.headers()['content-type'] || '')) tiles.ok++; else tiles.bad.push(r.status() + ' ' + r.url()); } });
   page.on('requestfailed', (r) => { if (r.url().includes('arcgisonline.com')) tiles.bad.push('failed ' + r.failure()?.errorText + ' ' + r.url()); });
   page.on('response', async (r) => { if (r.url().includes('/api/aircraft') && r.ok()) { apiCalls++; lastApi = await r.json(); apiHistory.push(lastApi); } });
+  // Weather and rain: record responses as they arrive, read bodies later.
+  const weatherResps = []; const rainLists = []; const rainTiles = [];
+  page.on('response', (r) => {
+    const u = r.url();
+    if (u.startsWith('https://api.open-meteo.com/')) weatherResps.push({ status: r.status(), json: r.json().catch(() => null) });
+    if (u.startsWith('https://api.rainviewer.com/')) rainLists.push({ status: r.status(), json: r.json().catch(() => null) });
+    if (u.startsWith('https://tilecache.rainviewer.com/')) rainTiles.push({ url: u, status: r.status(), type: r.headers()['content-type'] });
+  });
 
   console.log('1. First visit, no location');
   await page.goto(BASE + '/');
@@ -126,6 +138,148 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   const rgb = (h) => `rgb(${hexToRgb(h).join(', ')})`;
   const swatchBad = swatches.filter(([hex, c]) => { const a = lastApi.aircraft.find((x) => x.hex === hex); return a && !a.emergency && c !== rgb(altitudeColor(a)); });
   check(swatches.length > 0 && swatchBad.length === 0, `list swatches match the radar colours (${swatches.length})`);
+
+  console.log('3c. Clock and weather');
+  let liveTz = null; // the time zone the page learnt from Open-Meteo, if it answered
+  {
+    await page.waitForFunction(() => !/Loading/.test(document.querySelector('#weather').textContent), null, { timeout: 15000 }).catch(() => {});
+    const last = weatherResps.at(-1);
+    const w = last ? await last.json : null;
+    const text = await page.textContent('#weather');
+    if (last?.status === 200 && w?.current) {
+      liveTz = w.timezone;
+      const c = w.current;
+      const want = [`${Math.round(c.temperature_2m)} °C`, `${Math.round(c.wind_speed_10m)} km/h`, `${Math.round(c.pressure_msl)} hPa`];
+      check(want.every((t) => text.includes(t)), `live weather shown as Open-Meteo gave it: "${text}"`);
+    } else {
+      // Not worked around: the page says why. (Display checked below with a recorded answer.)
+      check(text.startsWith('Weather unavailable') && (!w?.reason || text.includes(w.reason)), `Open-Meteo ${last ? 'answered ' + last.status : "didn't answer"}; page says: "${text}"`);
+      console.log('   (live weather not verified this run)');
+    }
+    // The clock: the location's time once Open-Meteo has given its zone, else the browser's (UTC here).
+    const tz = liveTz || 'UTC';
+    const read = () => page.evaluate(() => ['clock-time', 'clock-zone', 'clock-utc'].map((id) => document.getElementById(id).textContent));
+    const [t1, zone, utc] = await read();
+    const expected = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+    const now = Date.now();
+    check([now - 1500, now - 500, now].map(expected).includes(t1), `clock shows the time in ${tz}: ${t1} ${zone} ${utc} (expected ${expected(now)})`);
+    const utcNow = [now, now - 1000].map((ms) => new Date(ms).toISOString().slice(11, 16));
+    if (t1.startsWith(utcNow[0]) || t1.startsWith(utcNow[1])) check(utc === '', `local time is UTC: no second UTC time ("${utc}")`);
+    else check(utcNow.some((u) => utc === `· ${u} UTC`), `UTC shown: ${utc}`);
+    await page.waitForTimeout(1100);
+    check((await read())[0] !== t1, 'clock ticks');
+  }
+
+  console.log('3d. Rain radar (RainViewer)');
+  {
+    await page.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    const list = rainLists.length ? await rainLists[rainLists.length - 1].json : null;
+    const frame = list?.radar?.past?.at(-1);
+    check(Boolean(frame), `RainViewer listed ${list?.radar?.past?.length} radar images (${rainLists.map((r) => r.status).join(', ')})`);
+    check(await page.getAttribute('#rain-toggle', 'aria-pressed') === 'true', 'rain is on by default');
+    const status = await page.textContent('#rain-status');
+    const tz = liveTz || 'UTC';
+    const frameTime = frame && new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(frame.time * 1000));
+    check(status.startsWith(`Radar ${frameTime}`), `status shows the image time: "${status}"`);
+    const zooms = [...new Set(rainTiles.map((t) => Number(t.url.match(/\/512\/(\d+)\//)?.[1])))];
+    const bad = rainTiles.filter((t) => t.status !== 200 || t.type !== 'image/png' || !t.url.includes(frame?.path));
+    check(rainTiles.length > 0 && bad.length === 0 && zooms.every((z) => z <= 7), `${rainTiles.length} rain tiles of the latest image, 512 px at zoom ${zooms.join(',')} (≤ 7), all PNG` + (bad.length ? ' — bad: ' + bad.slice(0, 3).map((t) => `${t.status} ${t.url}`).join('; ') : ''));
+    const links = await page.$$eval('#attribution a', (as) => as.map((a) => a.href));
+    check(links.includes('https://open-meteo.com/') && links.includes('https://www.rainviewer.com/'), 'Open-Meteo and RainViewer credited with links');
+
+    // Placement: a page whose rain tiles are replaced by one opaque magenta tile
+    // (the one under the centre) and transparent ones, and no aircraft.
+    const png = async (color) => Buffer.from(await page.evaluate((color) => {
+      const c = document.createElement('canvas'); c.width = c.height = 512;
+      if (color) { const x = c.getContext('2d'); x.fillStyle = color; x.fillRect(0, 0, 512, 512); }
+      return c.toDataURL('image/png').split(',')[1];
+    }, color), 'base64');
+    const magenta = await png('#ff00ff'); const clear = await png(null);
+    const center = { lat: 55.6761, lon: 12.5683 };
+    const asked = [];
+    const rp = await context.newPage();
+    let mark = null; // [z, x, y] of the magenta tile
+    await rp.route('https://tilecache.rainviewer.com/**', (route) => {
+      const [, z, x, y] = route.request().url().match(/\/512\/(\d+)\/(\d+)\/(\d+)\//).map(Number);
+      asked.push([z, x, y]);
+      const n = 2 ** z;
+      const cx = Math.floor((center.lon + 180) / 360 * n);
+      const cy = Math.floor((1 - Math.asinh(Math.tan(center.lat * Math.PI / 180)) / Math.PI) / 2 * n);
+      if (x === cx && y === cy) mark = [z, x, y];
+      route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: x === cx && y === cy ? magenta : clear });
+    });
+    const recordedWeather = require('node:fs').readFileSync(require('node:path').join(__dirname, '../test/fixtures/openmeteo-cph.json'));
+    await rp.route('https://api.open-meteo.com/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: recordedWeather }));
+    await rp.route('**/api/aircraft*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ now: Date.now(), source: 'test', center: { ...center, radiusKm: 50 }, aircraft: [] }) }));
+    await rp.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
+    await rp.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
+    await rp.waitForTimeout(3000); // map and rain tiles
+    {
+      // Weather display and the location's clock, from the recorded Open-Meteo answer (Copenhagen, 12.3 °C, overcast).
+      const text = await rp.textContent('#weather');
+      check(text === 'Overcast, 12 °C (feels 11 °C)Wind 10 km/h from NNE, gusts 21 · Visibility 7.5 km · 1032 hPa', `recorded Open-Meteo answer shown: "${text}"`);
+      const [t, zone, utc] = await rp.evaluate(() => ['clock-time', 'clock-zone', 'clock-utc'].map((id) => document.getElementById(id).textContent));
+      const cph = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+      const now = Date.now();
+      check([now - 1500, now - 500, now].map(cph).includes(t) && /^CES?T$/.test(zone), `clock switches to the location's zone: ${t} ${zone} (Copenhagen now ${cph(now)})`);
+      check([now, now - 1000].some((ms) => utc === `· ${new Date(ms).toISOString().slice(11, 16)} UTC`), `and UTC beside it: "${utc}"`);
+      const st = await rp.textContent('#rain-status');
+      const rt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(frame.time * 1000));
+      check(st.startsWith(`Radar ${rt}`), `radar time in the location's zone too: "${st}"`);
+      await rp.screenshot({ path: OUT + '/weather.png', clip: { x: 0, y: 0, width: 1440, height: 70 } });
+    }
+    const dimsR = await rp.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
+    const R = Math.min(dimsR.w, dimsR.h) / 2 - 28;
+    const W = (R / 50) * 2 * Math.PI * 6378.137 * Math.cos(center.lat * Math.PI / 180);
+    const [z] = mark ?? [asked[0]?.[0]];
+    const tilePx = W / 2 ** z;
+    const cWorld = { x: (center.lon + 180) / 360 * W, y: (1 - Math.asinh(Math.tan(center.lat * Math.PI / 180)) / Math.PI) / 2 * W };
+    // Sample points on a grid inside the radar, away from tile edges, the cross, rings and ring labels.
+    const pts = [];
+    for (let gx = -1; gx <= 1; gx += 0.08) for (let gy = -1; gy <= 1; gy += 0.08) {
+      const dx = gx * R, dy = gy * R, d = Math.hypot(dx, dy);
+      if (d > R - 6 || Math.abs(dx) < 5 || Math.abs(dy) < 5) continue;
+      if ([1, 2, 3, 4, 5].some((k) => Math.abs(d - (k * R) / 5) < 6)) continue;
+      if (dx > 0 && dy < 0 && Math.atan2(dx, -dy) < 50 * Math.PI / 180) continue; // labels sit at ~21°
+      const wx = cWorld.x + dx, wy = cWorld.y + dy;
+      const fx = wx / tilePx, fy = wy / tilePx;
+      if (Math.min(fx % 1, 1 - (fx % 1)) * tilePx < 4 || Math.min(fy % 1, 1 - (fy % 1)) * tilePx < 4) continue;
+      pts.push({ x: dimsR.w / 2 + dx, y: dimsR.h / 2 + dy, inside: mark && Math.floor(fx) === mark[1] && Math.floor(fy) === mark[2] });
+    }
+    const sample = () => rp.evaluate((pts) => {
+      const ctx = document.getElementById('radar').getContext('2d'); const dpr = devicePixelRatio;
+      return pts.map((p) => Array.from(ctx.getImageData(Math.round(p.x * dpr), Math.round(p.y * dpr), 1, 1).data.slice(0, 3)));
+    }, pts);
+    const on = await sample();
+    await rp.click('#rain-toggle');
+    await rp.waitForTimeout(300);
+    const off = await sample();
+    const inside = pts.filter((p) => p.inside).length;
+    const misses = [];
+    pts.forEach((p, i) => {
+      const want = p.inside ? off[i].map((v, k) => v * 0.3 + [255, 0, 255][k] * 0.7) : off[i];
+      if (want.some((v, k) => Math.abs(v - on[i][k]) > (p.inside ? 6 : 2))) misses.push(`${p.inside ? 'in' : 'out'} ${p.x.toFixed(0)},${p.y.toFixed(0)}: on ${on[i]} off ${off[i]}`);
+    });
+    check(Boolean(mark) && inside > 20 && pts.length - inside > 20 && misses.length === 0,
+      `synthetic tile ${mark?.join('/')} drawn exactly where Web Mercator puts it, at 70% over the map: ${pts.length - misses.length}/${pts.length} points (${inside} inside)` + (misses.length ? ' — ' + misses.slice(0, 4).join('; ') : ''));
+    check(await rp.getAttribute('#rain-toggle', 'aria-pressed') === 'false' && (await rp.textContent('#rain-status')) === '', 'switched off: button released, no radar time');
+    check(!(await rp.$$eval('#attribution a', (as) => as.map((a) => a.textContent))).includes('RainViewer'), 'switched off: RainViewer credit gone');
+    await rp.screenshot({ path: OUT + '/rain-synthetic-off.png' });
+    await rp.reload();
+    await rp.waitForTimeout(2500);
+    check(await rp.getAttribute('#rain-toggle', 'aria-pressed') === 'false', 'off is remembered after a reload');
+    const afterReload = await sample();
+    check(afterReload.every((c, i) => c.every((v, k) => Math.abs(v - off[i][k]) <= 2)), 'after the reload no rain is drawn');
+    await rp.click('#rain-toggle');
+    await rp.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
+    await rp.waitForTimeout(1500);
+    const again = await sample();
+    check(again.every((c, i) => c.every((v, k) => Math.abs(v - on[i][k]) <= 2)), 'switched on again: drawn as before');
+    await rp.screenshot({ path: OUT + '/rain-synthetic.png' });
+    await rp.close();
+    // Leave the setting as found for the rest of the run (on).
+  }
 
   console.log('4. Refresh every 5 s');
   const before = apiCalls; await page.waitForTimeout(11000);

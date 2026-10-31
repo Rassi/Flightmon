@@ -36,6 +36,8 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Path flown (user chose "option 3"): for the **selected** aircraft only (like ADS-B Exchange's default), a line in altitude colours. Our own recording of every aircraft's positions since the page opened (kept 2 h), plus OpenSky's track for the earlier part of the flight, fetched via the Worker (`/api/track`) on click and cached for the page. If OpenSky fails, the card says so and shows the recorded part. **The OpenSky part is committed but unverified**: the user chose to keep it and test it on the laptop (card says "(OpenSky)" if it works); if it doesn't work there, remove it. Times shown on a 24-hour clock regardless of browser language. |
 | 2026-10-31 | Aircraft icons: our own canvas silhouettes (not FlightScnr_Pi's images), chosen from the ADS-B emitter category plus short lists of turboprop, helicopter and wide-body type codes. Not animated: the user didn't want moving parts (FlightScnr_Pi spins helicopter rotors). No category and no listed type: a plain arrow rather than a guess. |
 | 2026-10-31 | Retired the "don't build anything that can't be verified" rule: it was for the first iterations, before we knew where things would run. Still test and check what can be checked; the "don't work around refusals" rule stays. |
+| 2026-10-31 | Ways to run it without starting a server (explored, nothing chosen; "leave it for now"): (1) deploy to Cloudflare and use the browser's "Install as app" (own window, also on a phone; needs a manifest + icon); (2) a Chrome/Edge extension, whose pages may fetch the feeds directly when listed in its host permissions (all local, no Cloudflare; loaded unpacked; untested); (3) Electron/Tauri desktop app (overkill: size, signing, per-OS builds); (4) a one-click launcher for `wrangler dev` (still a server). Opening `index.html` from disk can't work: the feeds send no CORS headers. |
+| 2026-10-31 | Clock and weather in the header, rain radar on the map with an on/off button (user asked for all three). Clock: the time at the radar's location (zone from Open-Meteo; the browser's until it answers), with seconds, plus UTC when different. Weather: Open-Meteo "current" (sky, temperature, feels-like, wind from/gusts, visibility, pressure), refreshed every 15 min. Rain: RainViewer's latest radar image at 70% (`--rain-opacity`), on by default, the choice remembered in the browser; image list refreshed every 5 min; the image time is shown under the button. Credits with links under the radar (RainViewer only while rain is shown). No rain animation or forecast (not asked for). |
 
 ## Data sources: what we found
 
@@ -48,7 +50,9 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 | `opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{nm}` | ✅ 200 | ❌ same | **Fallback feed.** Same format, `aircraft` array, `now` in seconds. FlightScnr uses a `/api/v3/lat/…` endpoint (not tried). |
 | `api.airplanes.live` | ❌ 403 | ❌ | "Please contact us at contact@airplanes.live": needs permission first. |
 | `api.planespotters.net/pub/photos/hex/{hex}` | ❌ 403 | API sends `ACAO: *` | Rejects generic User-Agents (wants app name + contact URL). Headless Chromium got a 403 HTML page. **Untested from a real browser.** |
-| `api.open-meteo.com` | ✅ (then 429) | ✅ `ACAO: *` | 429 "daily limit" came from the container's shared IP; a laptop shouldn't hit it. Free, no key, non-commercial. |
+| `api.open-meteo.com/v1/forecast?current=…&timezone=auto` | ✅ once, then 429 | ✅ `ACAO: *` | **In use** for weather and the location's time zone. 429 `{"reason":"Daily API request limit exceeded. Please try again tomorrow."}` comes from the container's shared IP (seen 2026-10-30 and 10-31); a laptop has its own allowance (10,000 calls/day, non-commercial). Once it didn't answer within 8 s at all. Free, no key; CC BY 4.0, credit with a link. "Current" values are model data in 15-min steps, not observations. `wind_direction_10m` is where the wind comes from. |
+| `api.rainviewer.com/public/weather-maps.json` + `tilecache.rainviewer.com` | ✅ | ✅ `ACAO: *` (list and tiles) | **In use** for the rain overlay. No key; "personal and educational use only", credit RainViewer with a link. The list has the last 2 h, one image per 10 min (`radar.past[]`, `nowcast` empty). Tiles: `{host}{path}/{256\|512}/{z}/{x}/{y}/{colour}/{smooth}_{snow}.png`. Since Jan 2026: **max zoom 7** (zoom 8+ answers 200 with a grey "Zoom Level Not Supported" image), one colour scheme (every colour number gives the same tile), no satellite/forecast. A 512 px tile at zoom 7 covers the same area as the 256 px one, twice as sharp. Only covers places with weather radars. |
+| LibreWXR (`api.librewxr.net`) | ✅ (list) | not checked | A self-hostable RainViewer-compatible API (AGPL code, CC BY 4.0 data; MET Norway radar for the Nordics, DWD, US) restoring higher zooms and colour schemes. Its public instance is "for testing". A fallback if RainViewer's free tier goes. |
 | Map: CARTO (`basemaps.cartocdn.com`) | 200 | `ACAO: *` | ⚠️ Every tile is an **"API KEY REQUIRED"** placeholder. Free key: carto.com/basemaps/apikey. |
 | Map: `tile.openstreetmap.org` | 200 | `ACAO: *` | ⚠️ Every tile is an **"Access blocked"** placeholder (OSM tile usage policy). |
 | Map: Esri `server.arcgisonline.com/.../World_Street_Map` (and `World_Imagery`) | ✅ real tiles | ✅ `ACAO: *` | **In use.** No key. Esri Master License Agreement; attribution required (in `public/basemap.js`). "Mature support", **retires December 2029**; its replacement needs a key. Esri staff (2025): legacy basemaps work without a key; commercial use depends on the licence. URL order is `{z}/{y}/{x}`. |
@@ -95,12 +99,16 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 - Races in the browser check: record responses synchronously (read bodies afterwards), use the aircraft's *current* position after waiting (a jet moves ~10 px between refreshes at 50 km), and wait for an actual refresh rather than a fixed time (refresh = 5 s after the previous fetch finished, plus feed latency). A failure that doesn't reproduce: add diagnostics before re-running, don't just re-run.
 - Playwright reports no `response` for a request the browser blocked for CORS; read the real status over the DevTools protocol (`Network.responseReceivedExtraInfo`).
 
+- Rain radar: checked with Playwright replacing RainViewer's tiles by one opaque magenta tile (the one under the centre) and comparing the radar with rain on and off at a grid of points: inside the tile = 70% magenta over the map, outside unchanged. Independent of whether it's raining.
+- The radar's rain layer is drawn opaque onto an offscreen canvas and then put over the map at 70% in one go; drawing each tile translucent would show seams where tiles overlap by a pixel (as with the map dimming).
+- The aircraft pixel check after a refresh missed once by ~4 px (sampled the dark outline of a narrow fuselage): the known race between the response the check read and the one the page drew. Passed on the re-run; the crop (`miss.png`) showed the icon next to the point.
+
 **The cloud container**
 - `wrangler dev` works and uses the HTTPS proxy for the Worker's outgoing fetches. Headless Chromium needs the proxy too for anything on the internet (map tiles), with `localhost` bypassed.
-- `pkill -f "wrangler dev"` matches and kills the shell running it (exit 144); use `pkill -f "[w]rangler dev"`.
+- `pkill -f "wrangler dev"` matches and kills the shell running it (exit 144); use `pkill -f "[w]rangler dev"`, and not in the same command as `npx wrangler dev …` (that command line contains "wrangler dev" itself, so it's killed too): stop and start in separate commands.
 - Sending a browser-like User-Agent to get past a 403 is blocked by Claude's safety checks (and against the rules here anyway).
 - The git proxy refuses deleting remote branches (403); `curl` to github.com web pages gets 403, but `git clone` of public repos works (attach with `add_repo` first). The FlightScnr_Pi wiki clones as `…/FlightScnr_Pi.wiki.git`.
-- The container shares its outgoing IP with other users, so rate limits (e.g. Open-Meteo's 429) can be hit here that a laptop wouldn't.
+- The container shares its outgoing IP with other users, so rate limits (e.g. Open-Meteo's 429) can be hit here that a laptop wouldn't. The browser check then checks the page *says* so, and checks the weather display with the recorded answer (`test/fixtures/openmeteo-cph.json`) instead.
 
 ## Reference projects
 
@@ -139,16 +147,18 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 - Aircraft-type icons (own drawings, static)
 - Click a plane for details, with route and airframe from adsbdb
 - Path flown by the selected aircraft (recorded since page open; OpenSky history unverified)
+- Clock (location's time + UTC) and weather (Open-Meteo) in the header
+- Rain radar overlay (RainViewer), switchable
 
 **Candidates: fit a laptop browser, no key**
 1. Military / twin-engine icon variants (need a type database, e.g. ICAO Doc 8643 descriptions; check licence)
 2. Altitude / speed filters; zoom with mouse wheel or keys
-3. Clock and weather (Open-Meteo, works directly from the browser); air quality (Open-Meteo)
+3. Air quality (Open-Meteo); a short forecast; rain radar animation (the list has 2 h of images)
 4. Aircraft just outside the range shown on the rim
 5. Tag options: flight number / callsign / registration; leader lines
 6. Animated radar sweep (left out of the minimal start on purpose)
 7. Airports and runways overlay (OurAirports open data)
-8. Precipitation overlay (LibreWXR / RainViewer; check terms and CORS)
+8. ~~Precipitation overlay~~ done (RainViewer); LibreWXR as a fallback
 9. ISS on the radar and an ISS tracker (wheretheiss.at, no key)
 10. Arrivals/departures board built from aircraft the radar sees (no schedule API)
 11. Short trails behind every aircraft (the recording is already there); favourite locations; tracked-flight / follow view
@@ -177,11 +187,13 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-10-31 | Colour by altitude (legend, list swatches) and aircraft-type icons. |
 | 2026-10-31 | Click a plane for details: adsbdb route and airframe, live data, stale-route warning. `src/geo.js` moved to `public/geo.js` (shared by page and Worker). |
 | 2026-10-31 | Path flown by the selected aircraft: recorded positions (verified) + OpenSky history via `/api/track` (unverified here). |
+| 2026-10-31 | Clock, weather (Open-Meteo) and a switchable rain radar (RainViewer). Tile drawing shared in `public/tiles.js`. Live weather unverified from the container (429); display verified with a recorded answer. |
 
 ## Open questions
 
 - Does OpenSky's track load from the laptop (`npm run dev`) and from Cloudflare? It fails from Claude's container (Node/workerd only). Kept for now; the user is testing it on the laptop. Not working there → remove it.
 - OpenSky's terms of use page couldn't be read (403).
+- Live Open-Meteo weather on the laptop: the container only ever got one answer before its shared IP hit the daily limit. Expect it to just work there.
 
 - Do adsb.lol / adsb.fi accept requests from Cloudflare? (Check at the first deploy.)
 - Esri's terms summary page couldn't be loaded; the exact conditions for keyless use are unconfirmed.

@@ -18,10 +18,18 @@
       <button type="submit">Show</button>
       <button type="button" id="locate">Use my location</button>
     </form>
+    <div class="now">
+      <p class="clock" title="Time at the radar's location"><span id="clock-time" class="clock-time"></span> <span id="clock-zone" class="muted"></span> <span id="clock-utc" class="muted"></span></p>
+      <p id="weather" class="weather" aria-live="polite"></p>
+    </div>
   </header>
   <main>
     <section class="radar">
       <canvas id="radar" role="img" aria-label="Radar showing nearby aircraft"></canvas>
+      <div class="radar-tools">
+        <button type="button" id="rain-toggle" class="toggle" aria-pressed="false">Rain</button>
+        <span id="rain-status" class="rain-status"></span>
+      </div>
       <p id="legend" class="legend" aria-label="Altitude colours"></p>
       <p id="attribution" class="attribution"></p>
     </section>

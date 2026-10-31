@@ -1,6 +1,8 @@
 import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.js';
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
+import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
+import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { drawRadar, hitTest } from './radar.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
 import {
@@ -12,6 +14,10 @@ const STALE_MS = 20000;
 const DEFAULT_RANGE_KM = 50;
 const MAX_RANGE_KM = 463;
 const STORAGE_KEY = 'flightmon.location';
+const RAIN_KEY = 'flightmon.rain';
+const WEATHER_REFRESH_MS = 15 * 60 * 1000; // Open-Meteo's current values change every 15 min
+const RAIN_REFRESH_MS = 5 * 60 * 1000; // a new radar image every 10 min
+const RAIN_STALE_S = 30 * 60;
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -22,6 +28,12 @@ const els = {
   locate: $('locate'),
   canvas: $('radar'),
   attribution: $('attribution'),
+  clockTime: $('clock-time'),
+  clockZone: $('clock-zone'),
+  clockUtc: $('clock-utc'),
+  weather: $('weather'),
+  rainToggle: $('rain-toggle'),
+  rainStatus: $('rain-status'),
   legend: $('legend'),
   details: $('details'),
   status: $('status'),
@@ -38,6 +50,13 @@ const state = {
   selected: null, // the clicked aircraft, as last seen; its details are shown
   info: undefined, // adsbdb lookup for the selected aircraft (undefined while loading)
   track: undefined, // its path from OpenSky: { path } or { error } (undefined while loading)
+  weather: null, // Open-Meteo's current weather at the location (see weather.js)
+  weatherError: null,
+  weatherAt: 0, // when it was last asked for
+  rainOn: true,
+  rainFrame: null, // the latest radar image: { host, path, time }
+  rainError: null,
+  rainAt: 0,
 };
 
 const trails = new TrailRecorder(); // every aircraft's positions since the page opened
@@ -91,6 +110,7 @@ function useLocation(loc) {
   history.replaceState(null, '', `?${params}`);
   render();
   poll();
+  loadWeather();
 }
 
 // Accept "55.6761, 12.5683" (as copied from a map) in the latitude field.
@@ -162,8 +182,137 @@ async function poll() {
 
 // Don't poll in a background tab; catch up as soon as it's visible again.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) poll();
+  if (document.hidden) return;
+  poll();
+  refreshSlow();
 });
+
+// --- clock, weather and rain ------------------------------------------------
+
+let weatherController = null;
+
+async function loadWeather() {
+  weatherController?.abort();
+  if (!state.location) return;
+  const ctrl = (weatherController = new AbortController());
+  const { lat, lon } = state.location;
+  state.weatherAt = Date.now();
+  if (state.weather && (state.weather.lat !== lat || state.weather.lon !== lon)) state.weather = null;
+  renderWeather();
+  try {
+    const w = await fetchWeather(lat, lon, (url, opts) => fetch(url, { ...opts, signal: AbortSignal.any([opts.signal, ctrl.signal]) }));
+    if (ctrl.signal.aborted) return;
+    state.weather = { ...w, lat, lon };
+    state.weatherError = null;
+  } catch (err) {
+    if (ctrl.signal.aborted) return;
+    state.weatherError = err.message;
+  }
+  renderWeather();
+  renderClock();
+  renderRain(); // its time is shown in the location's time zone
+}
+
+async function loadRain() {
+  state.rainAt = Date.now();
+  try {
+    state.rainFrame = await fetchFrame();
+    state.rainError = null;
+  } catch (err) {
+    state.rainError = err.message;
+  }
+  renderRain();
+  drawCanvas();
+}
+
+// Weather and rain change slowly: refresh them when due, and not in a background tab.
+function refreshSlow() {
+  if (document.hidden) return;
+  if (state.location && Date.now() - state.weatherAt > WEATHER_REFRESH_MS) loadWeather();
+  if (state.rainOn && Date.now() - state.rainAt > RAIN_REFRESH_MS) loadRain();
+}
+
+function setRain(on) {
+  state.rainOn = on;
+  try {
+    localStorage.setItem(RAIN_KEY, on ? 'on' : 'off');
+  } catch {
+    // Not remembered.
+  }
+  renderRain();
+  drawCanvas();
+  refreshSlow();
+}
+
+els.rainToggle.addEventListener('click', () => setRain(!state.rainOn));
+
+// The time at the radar's location (once the weather has told us its time
+// zone; the browser's until then), and UTC as aviation uses it.
+function renderClock() {
+  const { time, zone, utc } = clockParts(new Date(), state.weather?.timeZone);
+  els.clockTime.textContent = time;
+  els.clockZone.textContent = zone;
+  // Only when it differs (not in London in winter, nor when the zone is UTC).
+  els.clockUtc.textContent = time.startsWith(utc) ? '' : `· ${utc} UTC`;
+}
+
+function renderWeather() {
+  if (!state.location) {
+    els.weather.replaceChildren();
+    els.weather.title = '';
+    return;
+  }
+  if (!state.weather) {
+    els.weather.textContent = state.weatherError ? `Weather unavailable: ${state.weatherError}` : 'Loading weather…';
+    els.weather.title = '';
+    return;
+  }
+  const [sky, rest] = weatherLines(state.weather);
+  const first = document.createElement('span');
+  first.className = 'sky';
+  first.textContent = sky;
+  els.weather.replaceChildren(first, document.createElement('br'), rest);
+  els.weather.title = `Open-Meteo, for ${state.weather.time?.replace('T', ' ')} local time` +
+    (state.weatherError ? ` (last update failed: ${state.weatherError})` : '');
+}
+
+function renderRain() {
+  els.rainToggle.setAttribute('aria-pressed', String(state.rainOn));
+  els.rainToggle.title = state.rainOn ? 'Hide the rain radar' : 'Show the rain radar';
+  let text = '';
+  let problem = false;
+  if (state.rainOn) {
+    if (state.rainFrame) {
+      const { time } = clockParts(new Date(state.rainFrame.time * 1000), state.weather?.timeZone);
+      text = `Radar ${time.slice(0, 5)}`;
+      problem = Date.now() / 1000 - state.rainFrame.time > RAIN_STALE_S;
+      if (state.rainError) text += ` (update failed: ${state.rainError})`;
+    } else if (state.rainError) {
+      text = `Unavailable: ${state.rainError}`;
+      problem = true;
+    } else {
+      text = 'Loading…';
+    }
+  }
+  els.rainStatus.textContent = text;
+  els.rainStatus.classList.toggle('error', problem);
+  renderAttribution();
+}
+
+function renderAttribution() {
+  const credits = [WEATHER_CREDIT];
+  if (state.rainOn) credits.push(RAIN_CREDIT);
+  const parts = [ATTRIBUTION];
+  for (const { label, text, href } of credits) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = text;
+    parts.push(`. ${label}: `, a);
+  }
+  els.attribution.replaceChildren(...parts);
+}
 
 // --- rendering --------------------------------------------------------------
 
@@ -178,6 +327,7 @@ function cssColors() {
     highlight: get('--highlight'),
     halo: get('--bg'),
     mapOpacity: Number(get('--map-opacity')) || 1,
+    rainOpacity: Number(get('--rain-opacity')) || 0.7,
   };
 }
 
@@ -222,9 +372,12 @@ function drawCanvas() {
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
     trail: selectedTrail(),
     colors,
-    background: (c, view) => drawBasemap(c, view, {
-      dpr, opacity: colors.mapOpacity, dimColor: colors.halo, onLoad: queueDraw,
-    }),
+    background: (c, view) => {
+      drawBasemap(c, view, { dpr, opacity: colors.mapOpacity, dimColor: colors.halo, onLoad: queueDraw });
+      if (state.rainOn && state.rainFrame) {
+        drawRain(c, view, state.rainFrame, { dpr, opacity: colors.rainOpacity, onLoad: queueDraw });
+      }
+    },
   });
 }
 
@@ -445,10 +598,22 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') deselect();
 });
 
-els.attribution.textContent = ATTRIBUTION;
+try {
+  state.rainOn = localStorage.getItem(RAIN_KEY) !== 'off';
+} catch {
+  // On by default.
+}
+renderRain();
 renderLegend();
 new ResizeObserver(drawCanvas).observe(els.canvas);
 setInterval(renderStatus, 1000);
+// Tick just after each whole second, so the clock doesn't lag behind.
+(function tick() {
+  renderClock();
+  setTimeout(tick, 1005 - (Date.now() % 1000));
+})();
+setInterval(refreshSlow, 60 * 1000);
+refreshSlow();
 
 // --- start ------------------------------------------------------------------
 
