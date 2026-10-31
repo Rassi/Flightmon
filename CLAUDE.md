@@ -1,9 +1,11 @@
 # Flightmon
 
 Read `docs/notes.md` first: decisions, what we've found out about each data
-source, reference projects, the feature backlog and open questions. Whenever
-something is learned or decided, add it there (with the date) in the same
-commit.
+source, gotchas, reference projects, the feature backlog, history and open
+questions. Keep it up to date in the same commit as each change: add
+decisions the user makes (and things deliberately left out), findings about
+services, gotchas that cost time, new feature ideas, and a history line.
+Date each entry.
 
 ## Git
 

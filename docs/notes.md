@@ -2,7 +2,14 @@
 
 What we've decided, what we've found out, and what could come next. Read
 this at the start of a session; add to it whenever something is learned or
-decided (with the date), in the same commit as the change it belongs to.
+decided (with the date), in the same commit as the change it belongs to:
+
+- **Decisions**: what the user chose, and choices made on their behalf
+  (including things deliberately left out, and why).
+- **Findings**: how a service or data source actually behaved when tried.
+- **Gotchas**: things that cost time or nearly went wrong, so they don't again.
+- **Backlog**: feature ideas, and their status.
+- **History**: one line per change of note.
 
 ## Decisions
 
@@ -16,7 +23,13 @@ decided (with the date), in the same commit as the change it belongs to.
 | 2026-10-31 | Units: metric (m, km, km/h). Default range 50 km, refresh 5 s. |
 | 2026-10-31 | Commit straight to `main`; no branches or PRs unless asked. |
 | 2026-10-31 | Develop against local `wrangler dev`; the user decides when to deploy to Cloudflare. |
+| 2026-10-31 | Deploying, when it comes: either Cloudflare's GitHub integration (deploys every push to `main`) or `npx wrangler login` + `npm run deploy`. Not chosen yet. The `workers.dev` address will be public; Cloudflare Access can restrict it. |
+| 2026-10-31 | The Worker only proxies `/api/aircraft` (validated lat/lon, radius ≤ 463 km), with an honest User-Agent; not a general proxy. No response cache: with one screen polling every 5 s it would never hit. |
+| 2026-10-31 | Aircraft on the ground: drawn grey and unlabelled (they pile up at airports), still in the list. Ground stations/vehicles, positions older than 60 s: dropped. |
+| 2026-10-31 | Dark UI kept; dark *map* not required. Map shown at full opacity (`--map-opacity` in `style.css`). |
 | 2026-10-31 | Prefer dependencies that are free and need no API key. Map: Esri World Street Map, full opacity. |
+| 2026-10-31 | FlightScnr / FlightScnr_Pi are not a starting point for the code: different platforms (Python/pygame on a Pi; C++ on an ESP32) and licence conditions (attribution, non-commercial, share-alike). Used as a feature catalogue. |
+| 2026-10-31 | Notes live in this file, in the repo, so every new session has them. |
 
 ## Data sources: what we found
 
@@ -49,13 +62,29 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 - `seen_pos` can be tens of seconds old; positions older than 60 s are dropped.
 - `dst`/`dir` (readsb's distance and bearing from the query point) differ from a spherical great circle by up to 0.22%; bearings agree within 0.05°.
 
-## Technical gotchas
+## Gotchas
 
-- Workers treat every named export of the main module (`src/worker.js`) as an entrypoint and refuse constants: keep it to a default export.
+**Code**
+- Workers treat every named export of the main module (`src/worker.js`) as an entrypoint and refuse constants: keep it to a default export. Unit tests in Node didn't catch this; only `wrangler dev` did.
 - Map tiles are Web Mercator; the radar draws aircraft, rings and tiles all in that projection so they line up. Drawing aircraft by distance/bearing instead would be ~3 px off at 50 km and kilometres off at long ranges.
 - Drawing tiles translucent shows bright seams where they overlap by a pixel; draw opaque and dim with one overlay instead.
-- `wrangler dev` works in the container and uses the HTTPS proxy for the Worker's outgoing fetches.
-- Container quirks: the git proxy refuses deleting remote branches (403); `curl` to github.com web pages gets 403, but `git clone` of public repos works.
+- Map tiles must load with `crossOrigin = 'anonymous'` (Esri sends CORS headers), or the canvas becomes unreadable and the browser check's pixel reads fail.
+- An HTML `required` field blocks the form's submit event before any JS runs: the "paste lat, lon into one field" feature only worked once the split happened on `input`.
+- A CSS grid item won't shrink below its content (a wide table) unless it has `min-width: 0`: that caused horizontal scroll on phones.
+- "Use my location" (geolocation) only works on https or `localhost`.
+
+**Verifying**
+- Do the arithmetic in code, not in your head: two "failing" tests (a tile number, an antimeridian offset) were wrong expectations, not wrong code.
+- Look at the screenshots. They caught what the checks didn't: `@@@@@@@@` callsigns, cluttered airport labels, overlapping layout, tile seams, placeholder tiles.
+- When a test only runs under a condition (e.g. "if zoom is 10"), check the condition actually holds, or the test silently checks nothing.
+- Playwright reports no `response` for a request the browser blocked for CORS; read the real status over the DevTools protocol (`Network.responseReceivedExtraInfo`).
+
+**The cloud container**
+- `wrangler dev` works and uses the HTTPS proxy for the Worker's outgoing fetches. Headless Chromium needs the proxy too for anything on the internet (map tiles), with `localhost` bypassed.
+- `pkill -f "wrangler dev"` matches and kills the shell running it (exit 144); use `pkill -f "[w]rangler dev"`.
+- Sending a browser-like User-Agent to get past a 403 is blocked by Claude's safety checks (and against the rules here anyway).
+- The git proxy refuses deleting remote branches (403); `curl` to github.com web pages gets 403, but `git clone` of public repos works (attach with `add_repo` first). The FlightScnr_Pi wiki clones as `…/FlightScnr_Pi.wiki.git`.
+- The container shares its outgoing IP with other users, so rate limits (e.g. Open-Meteo's 429) can be hit here that a laptop wouldn't.
 
 ## Reference projects
 
@@ -116,6 +145,16 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 **Not applicable (Pi / device only)**
 - ATC audio, lo-fi music, chimes and voice alerts; Wi-Fi setup, power menu, firmware updates, boot disclaimer; touch gestures, facing calibration; email alerts
+
+## History
+
+| Date | Change |
+| --- | --- |
+| 2026-10-30 | Checked every feed and its CORS from the container: the feeds work but browsers can't call them directly. |
+| 2026-10-31 | Rebuilt as a Cloudflare Worker + static page: radar with rings, list by distance, location form, 5 s refresh. Unit tests on recorded feed responses. |
+| 2026-10-31 | Esri street map under the radar; everything drawn in Web Mercator. |
+| 2026-10-31 | Map at full opacity. |
+| 2026-10-31 | Notes (this file) and `scripts/browser-check.cjs` added to the repo. |
 
 ## Open questions
 
