@@ -1,7 +1,9 @@
 // The radar: range rings around the chosen location, north up, and each
-// aircraft at its distance and bearing, pointing along its track.
+// aircraft at its position, pointing along its track. Everything is drawn in
+// Web Mercator (see mercator.js) so it lines up with the map underneath.
 
 import { displayName } from './format.js';
+import { makeView, ringPoints } from './mercator.js';
 
 // Ring spacing of roughly a quarter of the range, rounded to 1, 2 or 5 × 10ⁿ km.
 export function ringStep(rangeKm) {
@@ -11,22 +13,28 @@ export function ringStep(rangeKm) {
   return step;
 }
 
-// Screen offset from the centre, in pixels; y grows downwards.
-export function project(distKm, bearingDeg, rangeKm, radiusPx) {
-  const r = (distKm / rangeKm) * radiusPx;
-  const θ = (bearingDeg * Math.PI) / 180;
-  return { x: r * Math.sin(θ), y: -r * Math.cos(θ) };
-}
-
 const MARGIN = 28;
 
-export function drawRadar(ctx, { width, height, aircraft, rangeKm, highlight, colors }) {
-  ctx.clearRect(0, 0, width, height);
-  const cx = width / 2;
-  const cy = height / 2;
+export function radarView(center, rangeKm, width, height) {
   const radius = Math.max(10, Math.min(width, height) / 2 - MARGIN);
+  return makeView(center, rangeKm, radius, width, height);
+}
 
-  drawRings(ctx, cx, cy, radius, rangeKm, colors);
+// `background(ctx, view)` draws the map; it is clipped to the outer ring.
+export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highlight, colors, background }) {
+  ctx.clearRect(0, 0, width, height);
+  const view = radarView(center, rangeKm, width, height);
+  const outer = ringPoints(view, rangeKm);
+
+  if (background) {
+    ctx.save();
+    pathThrough(ctx, outer);
+    ctx.clip();
+    background(ctx, view);
+    ctx.restore();
+  }
+
+  drawRings(ctx, view, outer, colors);
 
   // Ground traffic underneath, then airborne from low to high, highlight last.
   const order = [...aircraft].sort((a, b) =>
@@ -34,93 +42,117 @@ export function drawRadar(ctx, { width, height, aircraft, rangeKm, highlight, co
     (b.onGround - a.onGround) ||
     ((a.altM ?? 0) - (b.altM ?? 0)));
 
-  ctx.font = '11px system-ui, sans-serif';
+  ctx.font = '600 11px system-ui, sans-serif';
   ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.lineJoin = 'round';
   for (const ac of order) {
     if (ac.distKm > rangeKm) continue;
-    const p = project(ac.distKm, ac.bearingDeg, rangeKm, radius);
+    const p = view.toScreen(ac.lat, ac.lon);
     const color = ac.hex === highlight ? colors.highlight
       : ac.emergency ? colors.alert
       : ac.onGround ? colors.ground
       : colors.plane;
-    drawPlane(ctx, cx + p.x, cy + p.y, ac.trackDeg, color, ac.hex === highlight);
+    drawPlane(ctx, p.x, p.y, ac.trackDeg, color, colors.halo, ac.hex === highlight);
     // Aircraft parked at an airport pile up; label them only when highlighted.
     if (!ac.onGround || ac.hex === highlight) {
-      ctx.fillStyle = color;
-      ctx.fillText(displayName(ac), cx + p.x + 10, cy + p.y);
+      haloText(ctx, displayName(ac), p.x + 10, p.y, color, colors.halo);
     }
   }
+  return view;
 }
 
-function drawRings(ctx, cx, cy, radius, rangeKm, colors) {
-  const step = ringStep(rangeKm);
-  ctx.lineWidth = 1;
-  ctx.font = '11px system-ui, sans-serif';
+function pathThrough(ctx, points) {
+  ctx.beginPath();
+  points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.closePath();
+}
 
+// Text with an outline in the background colour, readable over the map.
+function haloText(ctx, text, x, y, color, halo) {
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = halo;
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+function drawRings(ctx, view, outer, colors) {
+  const { rangeKm } = view;
+  const step = ringStep(rangeKm);
+  const c = view.toScreen(view.center.lat, view.center.lon);
+  const north = outer[0];
+  const east = outer[outer.length / 4];
+  const south = outer[outer.length / 2];
+  const west = outer[(outer.length * 3) / 4];
+
+  ctx.lineWidth = 1;
   ctx.strokeStyle = colors.ring;
   ctx.beginPath();
-  ctx.moveTo(cx - radius, cy); ctx.lineTo(cx + radius, cy);
-  ctx.moveTo(cx, cy - radius); ctx.lineTo(cx, cy + radius);
+  ctx.moveTo(west.x, west.y); ctx.lineTo(east.x, east.y);
+  ctx.moveTo(north.x, north.y); ctx.lineTo(south.x, south.y);
   ctx.stroke();
 
   const rings = [];
   for (let d = step; d < rangeKm - step * 0.25; d += step) rings.push(d);
   rings.push(rangeKm);
 
+  ctx.font = '11px system-ui, sans-serif';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
+  ctx.lineJoin = 'round';
   for (const d of rings) {
-    const r = (d / rangeKm) * radius;
+    // 120 points: index 7 is at 21°, just right of north, for the label.
+    const points = d === rangeKm ? outer : ringPoints(view, d);
+    ctx.lineWidth = 1;
     ctx.strokeStyle = d === rangeKm ? colors.ringStrong : colors.ring;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    pathThrough(ctx, points);
     ctx.stroke();
-    // Label each ring just right of north, at 20°.
-    ctx.fillStyle = colors.muted;
-    ctx.fillText(`${Number(d.toFixed(1))} km`, cx + r * Math.sin(0.35) + 3, cy - r * Math.cos(0.35));
+    haloText(ctx, `${Number(d.toFixed(1))} km`, points[7].x + 3, points[7].y, colors.muted, colors.halo);
   }
 
-  ctx.fillStyle = colors.muted;
+  ctx.font = '600 12px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '600 12px system-ui, sans-serif';
-  const o = radius + 14;
-  ctx.fillText('N', cx, cy - o);
-  ctx.fillText('E', cx + o, cy);
-  ctx.fillText('S', cx, cy + o);
-  ctx.fillText('W', cx - o, cy);
+  ctx.fillStyle = colors.muted;
+  ctx.fillText('N', north.x, north.y - 14);
+  ctx.fillText('E', east.x + 14, east.y);
+  ctx.fillText('S', south.x, south.y + 14);
+  ctx.fillText('W', west.x - 14, west.y);
   ctx.textAlign = 'left';
 
   ctx.fillStyle = colors.ringStrong;
   ctx.beginPath();
-  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
   ctx.fill();
 }
 
-function drawPlane(ctx, x, y, trackDeg, color, emphasised) {
+function drawPlane(ctx, x, y, trackDeg, color, halo, emphasised) {
   ctx.save();
   ctx.translate(x, y);
   ctx.fillStyle = color;
-  ctx.strokeStyle = color;
+  ctx.lineJoin = 'round';
   if (emphasised) {
+    ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(0, 0, 11, 0, Math.PI * 2);
     ctx.stroke();
   }
+  ctx.strokeStyle = halo;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
   if (trackDeg === null) {
-    ctx.beginPath();
     ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
-    ctx.fill();
   } else {
     ctx.rotate((trackDeg * Math.PI) / 180);
-    ctx.beginPath();
     ctx.moveTo(0, -7);
     ctx.lineTo(5, 6);
     ctx.lineTo(0, 3);
     ctx.lineTo(-5, 6);
     ctx.closePath();
-    ctx.fill();
   }
+  ctx.stroke();
+  ctx.fill();
   ctx.restore();
 }

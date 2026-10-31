@@ -28,5 +28,8 @@ until asked.
 - adsb.lol and adsb.fi send no CORS headers, hence the Worker in `src/`.
   airplanes.live requires contacting them first; planespotters.net rejects
   generic User-Agents.
+- Map tiles: CARTO and tile.openstreetmap.org answer 200 with a placeholder
+  image ("API KEY REQUIRED" / "Access blocked"), so look at a tile, not just
+  the status. Esri World Street Map works without a key (retires Dec 2029).
 - Workers treat every named export of `src/worker.js` as an entrypoint and
   refuse anything that isn't a handler, so keep that file to a default export.

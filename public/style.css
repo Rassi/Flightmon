@@ -12,6 +12,9 @@
   --alert: #ff5d5d;
   --highlight: #ffd166;
   --accent: #3fb68f;
+  /* The street map is light; dimmed over the dark background so the
+     aircraft stand out. 1 shows it as is. */
+  --map-opacity: 0.45;
 }
 
 * { box-sizing: border-box; }
@@ -80,6 +83,17 @@ main > * { min-width: 0; }
 
 .radar { position: relative; min-height: 0; }
 .radar canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.attribution {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  /* Left half only, clear of the "S" under the radar. */
+  max-width: calc(50% - 16px);
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
 
 .list { min-height: 0; overflow: auto; }
 

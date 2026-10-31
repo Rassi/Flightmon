@@ -6,8 +6,8 @@ radar, and in a list sorted by distance. Updated every 5 seconds.
 Inspired by [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi)
 (ideas only; no code or images are taken from it).
 
-- **Radar**: range rings, north up, each aircraft at its distance and
-  direction, pointing along its track. Aircraft on the ground are grey and
+- **Radar**: a street map with range rings, north up, each aircraft at its
+  position, pointing along its track. Aircraft on the ground are grey and
   unlabelled. Emergencies (7500/7600/7700) are red.
 - **List**: callsign and registration, type, altitude (with ↑/↓ when climbing
   or descending), ground speed, distance and direction. Hover a row to find the
@@ -25,12 +25,23 @@ does it instead: it serves the page from `public/` and answers
 metric list sorted by distance.
 
 ```
-src/worker.js    Worker entry point (routing only)
-src/api.js       /api/aircraft: parameters, feed fallback
-src/aircraft.js  feed data → the list the page needs
-src/geo.js       distance and bearing
-public/          the page: index.html, app.js, radar.js, format.js, style.css
+src/worker.js       Worker entry point (routing only)
+src/api.js          /api/aircraft: parameters, feed fallback
+src/aircraft.js     feed data → the list the page needs
+src/geo.js          distance and bearing
+public/app.js       the page: location, polling, list
+public/radar.js     drawing the radar
+public/mercator.js  map projection
+public/basemap.js   map tiles
 ```
+
+The map is [Esri World Street Map](https://www.arcgis.com/home/item.html?id=3b93337983e9436f8db950e38a8629af),
+which works without an API key, under Esri's terms of use and with the
+attribution shown under the radar. Esri has it in "mature support" and plans
+to retire it in December 2029; the tile source is all in `public/basemap.js`.
+The map, the aircraft and the rings are all drawn in the map's projection
+(Web Mercator), so they line up exactly; the rings are true distance circles.
+`--map-opacity` in `style.css` sets how strongly the map shows.
 
 Altitudes are pressure altitudes, as the feeds report them, so a plane close to
 the ground can show a few metres below zero on a high-pressure day. Airport

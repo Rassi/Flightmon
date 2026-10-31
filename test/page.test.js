@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { climbArrow, compass, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed } from '../public/format.js';
-import { project, ringStep } from '../public/radar.js';
+import { ringStep } from '../public/radar.js';
 
 test('compass points', () => {
   assert.equal(compass(0), 'N');
@@ -45,12 +45,4 @@ test('ring spacing is a round number, about a quarter of the range', () => {
   assert.equal(ringStep(100), 20);
   assert.equal(ringStep(463), 100);
   assert.equal(ringStep(10), 2);
-});
-
-test('projection: north up, east right, distance scaled to the radius', () => {
-  const close = (p, x, y) => Math.abs(p.x - x) < 1e-9 && Math.abs(p.y - y) < 1e-9;
-  assert.ok(close(project(25, 0, 50, 200), 0, -100));
-  assert.ok(close(project(50, 90, 50, 200), 200, 0));
-  assert.ok(close(project(50, 180, 50, 200), 0, 200));
-  assert.ok(close(project(10, 270, 50, 200), -40, 0));
 });

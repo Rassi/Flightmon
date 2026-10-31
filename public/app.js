@@ -1,3 +1,4 @@
+import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { drawRadar } from './radar.js';
 import {
   climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
@@ -17,6 +18,7 @@ const els = {
   range: $('range'),
   locate: $('locate'),
   canvas: $('radar'),
+  attribution: $('attribution'),
   status: $('status'),
   rows: document.querySelector('#aircraft tbody'),
   empty: $('empty'),
@@ -161,7 +163,20 @@ function cssColors() {
     ground: get('--ground'),
     alert: get('--alert'),
     highlight: get('--highlight'),
+    halo: get('--bg'),
+    mapOpacity: Number(get('--map-opacity')) || 1,
   };
+}
+
+// Tiles arrive one by one; redraw at most once per frame.
+let drawQueued = false;
+function queueDraw() {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => {
+    drawQueued = false;
+    drawCanvas();
+  });
 }
 
 function aircraftInRange() {
@@ -180,13 +195,22 @@ function drawCanvas() {
   }
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!state.location) {
+    ctx.clearRect(0, 0, width, height);
+    return;
+  }
+  const colors = cssColors();
   drawRadar(ctx, {
     width,
     height,
+    center: state.location,
     aircraft: aircraftInRange(),
-    rangeKm: state.location?.rangeKm ?? DEFAULT_RANGE_KM,
+    rangeKm: state.location.rangeKm,
     highlight: state.highlight,
-    colors: cssColors(),
+    colors,
+    background: (c, view) => drawBasemap(c, view, {
+      dpr, opacity: colors.mapOpacity, dimColor: colors.halo, onLoad: queueDraw,
+    }),
   });
 }
 
@@ -275,6 +299,7 @@ els.rows.addEventListener('mouseleave', () => {
   drawCanvas();
 });
 
+els.attribution.textContent = ATTRIBUTION;
 new ResizeObserver(drawCanvas).observe(els.canvas);
 setInterval(renderStatus, 1000);
 
