@@ -12,9 +12,8 @@
   --alert: #ff5d5d;
   --highlight: #ffd166;
   --accent: #3fb68f;
-  /* The street map is light; dimmed over the dark background so the
-     aircraft stand out. 1 shows it as is. */
-  --map-opacity: 0.45;
+  /* 1 shows the street map as is; lower dims it towards the background. */
+  --map-opacity: 1;
 }
 
 * { box-sizing: border-box; }
