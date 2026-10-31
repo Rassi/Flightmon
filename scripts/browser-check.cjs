@@ -30,6 +30,7 @@ function expectedXY(a, center, range, w, h) {
 const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) failures++; };
 
 (async () => {
+  const { altitudeColor } = await import(require('node:url').pathToFileURL(require('node:path').join(__dirname, '../public/altitude.js')));
   // Map tiles are fetched from the internet; use the proxy when there is one.
   const proxy = process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined;
   const browser = await chromium.launch({ proxy });
@@ -68,8 +69,9 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(dists.every((d, i) => i === 0 || dists[i - 1] <= d), `${label}: sorted by distance`);
     // Pixel check: each aircraft is drawn at its projected position.
     const info = await page.evaluate(() => { const c = document.getElementById('radar'); return { w: c.clientWidth, h: c.clientHeight, dpr: devicePixelRatio }; });
-    const css = await page.evaluate(() => { const s = getComputedStyle(document.documentElement); return ['--plane', '--ground', '--alert', '--highlight'].map((v) => s.getPropertyValue(v).trim()); });
-    const palette = css.map(hexToRgb);
+    const alert = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--alert').trim()));
+    const halo = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()));
+    const expectedColor = (a) => (a.emergency ? alert : hexToRgb(altitudeColor(a)));
     const q = new URL(page.url()).searchParams;
     const range = Number(q.get('range'));
     const center = { lat: Number(q.get('lat')), lon: Number(q.get('lon')) };
@@ -82,10 +84,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     let ok = 0; const bad = [];
     pts.forEach((p, i) => {
       const px = pixels[i];
-      const want = palette[p.a.emergency ? 2 : p.a.onGround ? 1 : 0];
       const near = (c) => px.some((q) => c.every((v, k) => Math.abs(v - q[k]) < 40) && q[3] > 200);
-      const crowded = pts.some((q, j) => j !== i && Math.hypot(q.x - p.x, q.y - p.y) < 10);
-      if (near(want) || (crowded && palette.some(near))) ok++; else bad.push(`${p.a.hex} (${p.a.callsign}, ground=${p.a.onGround}, ${p.a.distKm} km ${p.a.bearingDeg}°) at ${p.x.toFixed(0)},${p.y.toFixed(0)} rgba(${px[5]})`);
+      // Where icons overlap, the one on top (fill or dark outline) may be another aircraft's.
+      const neighbours = pts.filter((q, j) => j !== i && Math.hypot(q.x - p.x, q.y - p.y) < 20);
+      if (near(expectedColor(p.a)) || neighbours.some((q) => near(expectedColor(q.a))) || (neighbours.length && near(halo))) ok++; else bad.push(`${p.a.hex} (${p.a.callsign}, ground=${p.a.onGround}, ${p.a.distKm} km ${p.a.bearingDeg}°) at ${p.x.toFixed(0)},${p.y.toFixed(0)} rgba(${px[5]})`);
     });
     if (bad.length) { const box = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y }; }); const p = pts.find((q) => bad[0].startsWith(q.a.hex)); await page.screenshot({ path: OUT + '/miss.png', clip: { x: box.x + p.x - 30, y: box.y + p.y - 30, width: 60, height: 60 } }); }
     check(bad.length === 0, `${label}: ${ok}/${pts.length} aircraft drawn at their projected pixel` + (bad.length ? ' — off: ' + bad.join('; ') : ''));
@@ -109,6 +111,12 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   });
   check(mapStats.distinct > 10 && mapStats.sd > 5, `map drawn under the radar (brightness mean ${mapStats.mean}, sd ${mapStats.sd}, ${mapStats.distinct} distinct values)`);
   check((await page.textContent('#attribution')).startsWith('Map: Esri'), 'Esri attribution shown');
+  const legend = await page.$eval('#legend', (e) => ({ text: e.textContent, bg: e.querySelector('.legend-bar').style.backgroundImage }));
+  check(legend.bg.startsWith('linear-gradient') && legend.text.includes('12 km') && legend.text.includes('Ground'), 'altitude legend shown: ' + legend.text);
+  const swatches = await page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => [tr.dataset.hex, getComputedStyle(tr.querySelector('.swatch')).backgroundColor]));
+  const rgb = (h) => `rgb(${hexToRgb(h).join(', ')})`;
+  const swatchBad = swatches.filter(([hex, c]) => { const a = lastApi.aircraft.find((x) => x.hex === hex); return a && !a.emergency && c !== rgb(altitudeColor(a)); });
+  check(swatches.length > 0 && swatchBad.length === 0, `list swatches match the radar colours (${swatches.length})`);
 
   console.log('4. Refresh every 5 s');
   const before = apiCalls; await page.waitForTimeout(11000);
@@ -125,7 +133,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const c = document.getElementById('radar'); const dpr = devicePixelRatio;
     return Array.from(c.getContext('2d').getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data);
   }, hxy);
-  check(hl[0] > 230 && hl[1] > 180 && hl[2] < 140, `${firstAir.callsign || firstAir.hex} drawn in the highlight colour: rgba(${hl})`);
+  check(hl[0] > 230 && hl[1] > 230 && hl[2] > 230, `${firstAir.callsign || firstAir.hex} drawn in the highlight colour (white): rgba(${hl})`);
   check(await page.$eval(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`, (tr) => tr.classList.contains('highlight')), 'row highlighted');
   await page.screenshot({ path: OUT + '/radar-hover.png' });
   await page.mouse.move(5, 5);
@@ -169,6 +177,11 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   check(overflow <= 0, `no horizontal page scroll (overflow ${overflow}px)`);
   const gap = await phone.evaluate(() => document.getElementById('status').getBoundingClientRect().top - document.getElementById('radar').getBoundingClientRect().bottom);
   check(gap >= 0, `status line starts below the radar (gap ${gap}px)`);
+  const overlaps = await phone.evaluate(() => {
+    const r = document.getElementById('radar').getBoundingClientRect();
+    return ['legend', 'attribution'].filter((id) => document.getElementById(id).getBoundingClientRect().top < r.bottom - 1);
+  });
+  check(overlaps.length === 0, 'legend and attribution below the radar' + (overlaps.length ? ': overlapping ' + overlaps.join(', ') : ''));
   const sq = await phone.$eval('#radar', (c) => [c.clientWidth, c.clientHeight]);
   check(sq[0] === sq[1], `radar is square on a phone: ${sq.join('×')}`);
   await phone.screenshot({ path: OUT + '/radar-390.png', fullPage: true });

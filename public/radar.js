@@ -2,7 +2,9 @@
 // aircraft at its position, pointing along its track. Everything is drawn in
 // Web Mercator (see mercator.js) so it lines up with the map underneath.
 
+import { altitudeColor } from './altitude.js';
 import { displayName } from './format.js';
+import { drawIcon, iconKind } from './icons.js';
 import { makeView, ringPoints } from './mercator.js';
 
 // Ring spacing of roughly a quarter of the range, rounded to 1, 2 or 5 × 10ⁿ km.
@@ -49,14 +51,15 @@ export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highl
   for (const ac of order) {
     if (ac.distKm > rangeKm) continue;
     const p = view.toScreen(ac.lat, ac.lon);
-    const color = ac.hex === highlight ? colors.highlight
+    const highlighted = ac.hex === highlight;
+    const color = highlighted ? colors.highlight
       : ac.emergency ? colors.alert
-      : ac.onGround ? colors.ground
-      : colors.plane;
-    drawPlane(ctx, p.x, p.y, ac.trackDeg, color, colors.halo, ac.hex === highlight);
+      : altitudeColor(ac);
+    if (highlighted) drawRing(ctx, p.x, p.y, 17, colors.highlight, colors.halo);
+    const size = drawIcon(ctx, iconKind(ac), p.x, p.y, ac.trackDeg, color, colors.halo);
     // Aircraft parked at an airport pile up; label them only when highlighted.
-    if (!ac.onGround || ac.hex === highlight) {
-      haloText(ctx, displayName(ac), p.x + 10, p.y, color, colors.halo);
+    if (!ac.onGround || highlighted) {
+      haloText(ctx, displayName(ac), p.x + size / 2 + 2, p.y, color, colors.halo);
     }
   }
   return view;
@@ -127,32 +130,13 @@ function drawRings(ctx, view, outer, colors) {
   ctx.fill();
 }
 
-function drawPlane(ctx, x, y, trackDeg, color, halo, emphasised) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.fillStyle = color;
-  ctx.lineJoin = 'round';
-  if (emphasised) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(0, 0, 11, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = halo;
-  ctx.lineWidth = 2;
+function drawRing(ctx, x, y, r, color, halo) {
   ctx.beginPath();
-  if (trackDeg === null) {
-    ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
-  } else {
-    ctx.rotate((trackDeg * Math.PI) / 180);
-    ctx.moveTo(0, -7);
-    ctx.lineTo(5, 6);
-    ctx.lineTo(0, 3);
-    ctx.lineTo(-5, 6);
-    ctx.closePath();
-  }
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = halo;
   ctx.stroke();
-  ctx.fill();
-  ctx.restore();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.stroke();
 }

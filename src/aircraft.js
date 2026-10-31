@@ -42,6 +42,8 @@ export function toAircraft(a, center) {
     callsign: callsign || null,
     reg: a.r || null,
     type: a.t || null,
+    // ADS-B emitter category: A1 light … A5 heavy, A7 rotorcraft, B1 glider, …
+    category: a.category || null,
     lat,
     lon,
     onGround,

@@ -7,8 +7,13 @@ Inspired by [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi)
 (ideas only; no code or images are taken from it).
 
 - **Radar**: a street map with range rings, north up, each aircraft at its
-  position, pointing along its track. Aircraft on the ground are grey and
-  unlabelled. Emergencies (7500/7600/7700) are red.
+  position, pointing along its track.
+- **Icons by aircraft type**: airliner, wide-body, business/regional jet,
+  turboprop, light aircraft, helicopter, glider, balloon, drone, fast jet;
+  chosen from the ADS-B emitter category and the ICAO type code.
+- **Colour by altitude**: orange near the ground, yellow, green, blue, magenta
+  at cruise, with a legend. Aircraft on the ground are grey and unlabelled.
+  Emergencies (7500/7600/7700) are red.
 - **List**: callsign and registration, type, altitude (with ↑/↓ when climbing
   or descending), ground speed, distance and direction. Hover a row to find the
   aircraft on the radar.
@@ -31,6 +36,8 @@ src/aircraft.js     feed data → the list the page needs
 src/geo.js          distance and bearing
 public/app.js       the page: location, polling, list
 public/radar.js     drawing the radar
+public/icons.js     aircraft icons
+public/altitude.js  colour by altitude
 public/mercator.js  map projection
 public/basemap.js   map tiles
 ```

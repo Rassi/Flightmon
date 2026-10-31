@@ -7,10 +7,10 @@
   --muted: #7f9692;
   --ring: #1f3a36;
   --ring-strong: #3a6b63;
-  --plane: #7cf3c8;
-  --ground: #5f7470;
-  --alert: #ff5d5d;
-  --highlight: #ffd166;
+  --alert: #ff3b3b;
+  /* The highlighted aircraft on the radar (white: yellow is an altitude colour). */
+  --highlight: #ffffff;
+  --row-highlight: #ffd166;
   --accent: #3fb68f;
   /* 1 shows the street map as is; lower dims it towards the background. */
   --map-opacity: 1;
@@ -82,6 +82,25 @@ main > * { min-width: 0; }
 
 .radar { position: relative; min-height: 0; }
 .radar canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.legend {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.legend-scale { display: flex; flex-direction: column; width: 150px; }
+.legend-bar { height: 7px; border-radius: 4px; }
+.legend-ticks { position: relative; height: 13px; }
+.legend-ticks span { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
+.legend-ticks span:first-child { transform: none; }
+.legend-ticks span:last-child { transform: translateX(-100%); }
+.legend-ground { white-space: nowrap; }
+
 .attribution {
   position: absolute;
   left: 0;
@@ -114,14 +133,25 @@ th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: no
 .reg { margin-left: 6px; color: var(--muted); font-weight: 400; font-size: 12px; }
 tr.ground td { color: var(--muted); }
 tr.emergency td { color: var(--alert); }
-tbody tr.highlight td { background: #1a2a24; color: var(--highlight); }
+tbody tr.highlight td { background: #1a2a24; color: var(--row-highlight); }
+.swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 0;
+}
 
 .empty { color: var(--muted); }
 
 @media (max-width: 800px) {
   html, body { height: auto; }
   main { flex: none; grid-template-columns: 1fr; }
-  .radar { aspect-ratio: 1 / 1; }
+  /* The radar fills the width; legend and attribution go underneath. */
+  .radar canvas { position: static; display: block; height: auto; aspect-ratio: 1 / 1; }
+  .legend, .attribution { position: static; max-width: none; }
+  .legend { justify-content: flex-end; margin: 6px 0 4px; }
   .list { overflow: visible; }
   .list table { display: block; overflow-x: auto; }
 }

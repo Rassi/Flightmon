@@ -1,3 +1,4 @@
+import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.js';
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { drawRadar } from './radar.js';
 import {
@@ -19,6 +20,7 @@ const els = {
   locate: $('locate'),
   canvas: $('radar'),
   attribution: $('attribution'),
+  legend: $('legend'),
   status: $('status'),
   rows: document.querySelector('#aircraft tbody'),
   empty: $('empty'),
@@ -159,8 +161,6 @@ function cssColors() {
     ring: get('--ring'),
     ringStrong: get('--ring-strong'),
     muted: get('--muted'),
-    plane: get('--plane'),
-    ground: get('--ground'),
     alert: get('--alert'),
     highlight: get('--highlight'),
     halo: get('--bg'),
@@ -221,6 +221,41 @@ function cell(text, className) {
   return td;
 }
 
+// Altitude with a swatch in the aircraft's radar colour.
+function altitudeCell(ac) {
+  const td = cell(`${formatAltitude(ac)} ${climbArrow(ac.vrateMs)}`.trim(), 'num');
+  const swatch = document.createElement('span');
+  swatch.className = 'swatch';
+  swatch.style.backgroundColor = ac.emergency ? cssColors().alert : altitudeColor(ac);
+  td.prepend(swatch);
+  return td;
+}
+
+function renderLegend() {
+  const bar = document.createElement('span');
+  bar.className = 'legend-bar';
+  bar.style.backgroundImage = legendGradient();
+  const top = STOPS[STOPS.length - 1][0];
+  const ticks = document.createElement('span');
+  ticks.className = 'legend-ticks';
+  for (const km of [0, 3, 6, 9, 12]) {
+    const t = document.createElement('span');
+    t.textContent = km === 12 ? '12 km' : String(km);
+    t.style.left = `${((km * 1000) / top) * 100}%`;
+    ticks.append(t);
+  }
+  const ground = document.createElement('span');
+  ground.className = 'legend-ground';
+  const dot = document.createElement('span');
+  dot.className = 'swatch';
+  dot.style.backgroundColor = GROUND_COLOR;
+  ground.append(dot, 'Ground');
+  const scale = document.createElement('span');
+  scale.className = 'legend-scale';
+  scale.append(bar, ticks);
+  els.legend.replaceChildren(scale, ground);
+}
+
 function renderList() {
   const list = aircraftInRange();
   const rows = list.map((ac) => {
@@ -240,7 +275,7 @@ function renderList() {
     tr.append(
       name,
       cell(ac.type ?? '–'),
-      cell(`${formatAltitude(ac)} ${climbArrow(ac.vrateMs)}`.trim(), 'num'),
+      altitudeCell(ac),
       cell(formatSpeed(ac.speedKmh), 'num'),
       cell(formatDistance(ac.distKm), 'num'),
       cell(formatDirection(ac.bearingDeg)),
@@ -300,6 +335,7 @@ els.rows.addEventListener('mouseleave', () => {
 });
 
 els.attribution.textContent = ATTRIBUTION;
+renderLegend();
 new ResizeObserver(drawCanvas).observe(els.canvas);
 setInterval(renderStatus, 1000);
 

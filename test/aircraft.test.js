@@ -34,6 +34,8 @@ test('converts to metric', () => {
   assert.ok(Math.abs(mea.distKm - 15.554 * 1.852) < 0.1);
   assert.ok(Math.abs(mea.bearingDeg - 195.6) < 0.2);
 
+  assert.equal(mea.category, 'A3');
+
   const sas = aircraft.find((a) => a.callsign === 'SAS500');
   assert.equal(sas.vrateMs, -5.9); // -1152 ft/min
 });
