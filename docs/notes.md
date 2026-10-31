@@ -33,7 +33,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Colour by altitude: our own scale (hue by altitude: orange 0 m → yellow 1.5 km → green 3 km → cyan 6 km → blue 9 km → magenta 12 km), always on, with a legend and a swatch per list row. Ground grey, unknown altitude light grey, emergencies red. The highlighted aircraft is white with a ring (yellow is now an altitude colour); list rows keep a yellow highlight. |
 | 2026-10-31 | Click for details: click a plane (radar or list) → a card above the list with the adsbdb route and airframe plus live data; ✕ / empty click / Esc closes. The browser calls adsbdb directly (CORS allowed), only on click; answers kept in memory for the page only (route data may not be copied or stored). Credit shown on the card. Routes that don't fit the aircraft's position are shown with a warning, not hidden. No route line on the radar (not asked for). |
 | 2026-10-31 | Destination line on the radar: started, then dropped. The user meant the path already flown, not a line to the destination. |
-| 2026-10-31 | Path flown (user chose "option 3"): for the **selected** aircraft only (like ADS-B Exchange's default), a line in altitude colours. Our own recording of every aircraft's positions since the page opened (kept 2 h), plus OpenSky's track for the earlier part of the flight, fetched via the Worker (`/api/track`) on click and cached for the page. If OpenSky fails, the card says so and shows the recorded part. **The OpenSky part is committed but unverified**; awaiting the user's choice: test it on the laptop (card says "(OpenSky)" if it works) or remove it until verifiable. Times shown on a 24-hour clock regardless of browser language. |
+| 2026-10-31 | Path flown (user chose "option 3"): for the **selected** aircraft only (like ADS-B Exchange's default), a line in altitude colours. Our own recording of every aircraft's positions since the page opened (kept 2 h), plus OpenSky's track for the earlier part of the flight, fetched via the Worker (`/api/track`) on click and cached for the page. If OpenSky fails, the card says so and shows the recorded part. **The OpenSky part is committed but unverified**: the user chose to keep it and test it on the laptop (card says "(OpenSky)" if it works); if it doesn't work there, remove it. Times shown on a 24-hour clock regardless of browser language. |
 | 2026-10-31 | Aircraft icons: our own canvas silhouettes (not FlightScnr_Pi's images), chosen from the ADS-B emitter category plus short lists of turboprop, helicopter and wide-body type codes. Not animated: the user didn't want moving parts (FlightScnr_Pi spins helicopter rotors). No category and no listed type: a plain arrow rather than a guess. |
 
 ## Data sources: what we found
@@ -179,7 +179,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 ## Open questions
 
-- Does OpenSky's track load from the laptop (`npm run dev`) and from Cloudflare? It fails from Claude's container (Node/workerd only). User to test; decide keep or remove.
+- Does OpenSky's track load from the laptop (`npm run dev`) and from Cloudflare? It fails from Claude's container (Node/workerd only). Kept for now; the user is testing it on the laptop. Not working there → remove it.
 - OpenSky's terms of use page couldn't be read (403).
 
 - Do adsb.lol / adsb.fi accept requests from Cloudflare? (Check at the first deploy.)
