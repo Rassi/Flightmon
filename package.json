@@ -1,18 +1,18 @@
 {
   "name": "flightmon",
   "private": true,
-  "version": "0.1.0",
-  "description": "A flight radar for a spare screen: a second monitor or an old iPad.",
-  "main": "server.js",
+  "version": "0.2.0",
+  "description": "A live flight radar for a browser: the aircraft around you on a radar and in a list.",
+  "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test test/*.test.js && npm run check:es5",
-    "check:es5": "acorn --ecma5 --silent public/app.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test"
   },
   "devDependencies": {
-    "acorn": "^8.15.0"
+    "wrangler": "^4.156.0"
   }
 }

@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flightmon",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  // Files in public/ are served as-is; everything else goes to the Worker.
+  "assets": { "directory": "./public" }
+}
