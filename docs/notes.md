@@ -119,6 +119,13 @@ the radar is drawn with pygame; a Flask web portal handles settings and API keys
 permission given to that project. Not a usable codebase for a browser page;
 useful as a feature catalogue. Full feature list is in its wiki
 (`git clone https://github.com/yashmulgaonkar/FlightScnr_Pi.wiki.git`, `Features.md`).
+Its feature screenshots (`docs/images/features/*.jpg`, clone with
+`--sparse` and `git sparse-checkout set docs/images/features`; looked at
+2026-10-31, after our weather was built from the feature list alone): the
+weather is a translucent curved "pill" on the radar's rim with a big clock,
+temperature, a wind arrow and speed, and a weather icon (sun, cloud); the rain
+overlay is strong and blocky over a dark map; green dashed rings, a sweep,
+compass letters in green on the rim.
 Keys it uses: FR24 (paid; routes, airline details, tracking), Tomorrow.io
 (optional; Open-Meteo fallback), AirLabs / FlightAware / OpenSky (optional route
 fallbacks), CARTO / Stadia (free map keys), aisstream.io (ships), NASA FIRMS
