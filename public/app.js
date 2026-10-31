@@ -2,6 +2,7 @@ import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.j
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { drawRadar, hitTest } from './radar.js';
+import { TrailRecorder, mergeTrail } from './trails.js';
 import {
   climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
 } from './format.js';
@@ -36,7 +37,10 @@ const state = {
   highlight: null, // hex of the aircraft under the pointer in the list
   selected: null, // the clicked aircraft, as last seen; its details are shown
   info: undefined, // adsbdb lookup for the selected aircraft (undefined while loading)
+  track: undefined, // its path from OpenSky: { path } or { error } (undefined while loading)
 };
+
+const trails = new TrailRecorder(); // every aircraft's positions since the page opened
 
 let lastView = null; // the radar's projection as last drawn, for clicks
 
@@ -76,6 +80,7 @@ function useLocation(loc) {
   state.error = null;
   state.highlight = null;
   state.selected = null;
+  trails.clear();
   fillForm(loc);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
@@ -142,6 +147,7 @@ async function poll() {
       throw new Error((body.error || `HTTP ${res.status}`) + detail);
     }
     state.data = body;
+    trails.record(body);
     state.lastOk = Date.now();
     state.error = null;
   } catch (err) {
@@ -214,6 +220,7 @@ function drawCanvas() {
     aircraft: aircraftInRange(),
     rangeKm: state.location.rangeKm,
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
+    trail: selectedTrail(),
     colors,
     background: (c, view) => drawBasemap(c, view, {
       dpr, opacity: colors.mapOpacity, dimColor: colors.halo, onLoad: queueDraw,
@@ -325,15 +332,48 @@ function renderStatus() {
 
 // --- details of the selected aircraft ---------------------------------------
 
+// OpenSky tracks, per aircraft, for this page (each costs some of the daily allowance).
+const trackCache = new Map();
+
+function fetchTrack(hex) {
+  if (!trackCache.has(hex)) {
+    const p = fetch(`/api/track?hex=${hex}`)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+        return { path: body.path };
+      })
+      .catch((err) => {
+        trackCache.delete(hex); // try again next time it's clicked
+        return { error: err.message };
+      });
+    trackCache.set(hex, p);
+  }
+  return trackCache.get(hex);
+}
+
+// OpenSky's path (if any) followed by what we've recorded, ending where it is now.
+function selectedTrail() {
+  if (!state.selected) return null;
+  return mergeTrail(state.track?.path, trails.get(state.selected.hex));
+}
+
 function select(ac) {
   if (state.selected?.hex === ac.hex) return;
   state.selected = ac;
   state.info = undefined;
+  state.track = undefined;
   render();
   lookup(ac.hex, ac.callsign).then((info) => {
     if (state.selected?.hex !== ac.hex) return; // another aircraft was chosen meanwhile
     state.info = info;
     renderSelected();
+  });
+  fetchTrack(ac.hex).then((track) => {
+    if (state.selected?.hex !== ac.hex) return;
+    state.track = track;
+    renderSelected();
+    drawCanvas();
   });
 }
 
@@ -352,7 +392,14 @@ function renderSelected() {
   // Follow the aircraft with each update; keep its last position if it's gone.
   const current = state.data?.aircraft.find((ac) => ac.hex === state.selected.hex);
   if (current) state.selected = current;
-  renderDetails(els.details, { ac: state.selected, info: state.info, seen: Boolean(current), onClose: deselect });
+  renderDetails(els.details, {
+    ac: state.selected,
+    info: state.info,
+    track: state.track,
+    trail: selectedTrail(),
+    seen: Boolean(current),
+    onClose: deselect,
+  });
   els.details.hidden = false;
 }
 

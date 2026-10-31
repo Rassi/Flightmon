@@ -40,7 +40,8 @@ export function hitTest(view, aircraft, x, y, maxPx = 18) {
 
 // `background(ctx, view)` draws the map; it is clipped to the outer ring.
 // `highlight`: a Set of hex codes to draw white with a ring.
-export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highlight = new Set(), colors, background }) {
+// `trail`: points [{ lat, lon, altM, onGround }] flown by the selected aircraft.
+export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highlight = new Set(), trail, colors, background }) {
   ctx.clearRect(0, 0, width, height);
   const view = radarView(center, rangeKm, width, height);
   const outer = ringPoints(view, rangeKm);
@@ -54,6 +55,13 @@ export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highl
   }
 
   drawRings(ctx, view, outer, colors);
+  if (trail && trail.length > 1) {
+    ctx.save();
+    pathThrough(ctx, outer);
+    ctx.clip();
+    drawTrail(ctx, view, trail, colors.halo);
+    ctx.restore();
+  }
 
   // Ground traffic underneath, then airborne from low to high, highlight last.
   const order = [...aircraft].sort((a, b) =>
@@ -156,4 +164,25 @@ function drawRing(ctx, x, y, r, color, halo) {
   ctx.lineWidth = 2;
   ctx.strokeStyle = color;
   ctx.stroke();
+}
+
+// The path flown, each segment coloured by the altitude at its start, over a
+// dark outline so it reads on the map.
+function drawTrail(ctx, view, trail, halo) {
+  const pts = trail.map((p) => view.toScreen(p.lat, p.lon));
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = halo;
+  ctx.stroke();
+  ctx.lineWidth = 2.5;
+  for (let i = 1; i < pts.length; i++) {
+    ctx.beginPath();
+    ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+    ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.strokeStyle = altitudeColor(trail[i - 1]);
+    ctx.stroke();
+  }
 }

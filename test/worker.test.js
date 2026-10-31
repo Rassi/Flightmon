@@ -82,3 +82,53 @@ test('anything else is a 404, and only GET is allowed', async () => {
   const post = await worker.fetch(new Request('http://localhost/api/aircraft?lat=1&lon=1', { method: 'POST' }));
   assert.equal(post.status, 405);
 });
+
+// --- /api/track ---------------------------------------------------------------
+
+const track = readFileSync(new URL('fixtures/opensky-track.json', import.meta.url), 'utf8');
+
+test('track: asks OpenSky for the live track and trims it', async () => {
+  const calls = stubFetch(() => new Response(track, { headers: { 'x-rate-limit-remaining': '392' } }));
+  const res = await get('/api/track?hex=4D224E');
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].url, 'https://opensky-network.org/api/tracks/all?icao24=4d224e&time=0');
+  assert.match(calls[0].init.headers['User-Agent'], /^Flightmon \(\+https:/);
+  const body = await res.json();
+  assert.equal(body.source, 'OpenSky');
+  assert.equal(body.hex, '4d224e');
+  assert.equal(body.callsign, 'RYR19EA');
+  assert.equal(body.remaining, 392);
+  assert.equal(body.path.length, 106);
+  // Recorded: departed London Stansted, last point approaching Copenhagen.
+  assert.deepEqual(body.path[0], { t: 1793452003, lat: 51.9018, lon: 0.2599, altM: 0, onGround: false });
+  assert.deepEqual(body.path.at(-1), { t: 1793456381, lat: 55.4327, lon: 12.1711, altM: 1524, onGround: false });
+  for (let i = 1; i < body.path.length; i++) assert.ok(body.path[i].t > body.path[i - 1].t, 'in time order');
+});
+
+test('track: bad hex is refused without asking OpenSky', async () => {
+  const calls = stubFetch(() => new Response(track));
+  for (const q of ['', 'hex=', 'hex=12345', 'hex=zzzzzz', 'hex=4d224e1']) {
+    assert.equal((await get(`/api/track?${q}`)).status, 400, q);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('track: OpenSky errors are passed on clearly', async () => {
+  stubFetch(() => new Response('', { status: 404 }));
+  let res = await get('/api/track?hex=000000');
+  assert.equal(res.status, 404);
+  assert.equal((await res.json()).error, 'OpenSky has no track for this aircraft');
+
+  stubFetch(() => new Response('', { status: 429, headers: { 'x-rate-limit-remaining': '0' } }));
+  res = await get('/api/track?hex=4d224e');
+  assert.equal(res.status, 429);
+  assert.deepEqual(await res.json(), { error: "OpenSky's daily limit for this connection is used up", remaining: 0 });
+
+  stubFetch(() => { throw new TypeError('fetch failed'); });
+  res = await get('/api/track?hex=4d224e');
+  assert.equal(res.status, 502);
+  assert.equal((await res.json()).error, "OpenSky didn't answer: fetch failed");
+
+  stubFetch(() => new Response('<html>', { status: 200 }));
+  assert.equal((await get('/api/track?hex=4d224e')).status, 502);
+});

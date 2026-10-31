@@ -32,6 +32,8 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Notes live in this file, in the repo, so every new session has them. |
 | 2026-10-31 | Colour by altitude: our own scale (hue by altitude: orange 0 m → yellow 1.5 km → green 3 km → cyan 6 km → blue 9 km → magenta 12 km), always on, with a legend and a swatch per list row. Ground grey, unknown altitude light grey, emergencies red. The highlighted aircraft is white with a ring (yellow is now an altitude colour); list rows keep a yellow highlight. |
 | 2026-10-31 | Click for details: click a plane (radar or list) → a card above the list with the adsbdb route and airframe plus live data; ✕ / empty click / Esc closes. The browser calls adsbdb directly (CORS allowed), only on click; answers kept in memory for the page only (route data may not be copied or stored). Credit shown on the card. Routes that don't fit the aircraft's position are shown with a warning, not hidden. No route line on the radar (not asked for). |
+| 2026-10-31 | Destination line on the radar: started, then dropped. The user meant the path already flown, not a line to the destination. |
+| 2026-10-31 | Path flown (user chose "option 3"): for the **selected** aircraft only (like ADS-B Exchange's default), a line in altitude colours. Our own recording of every aircraft's positions since the page opened (kept 2 h), plus OpenSky's track for the earlier part of the flight, fetched via the Worker (`/api/track`) on click and cached for the page. If OpenSky fails, the card says so and shows the recorded part. **The OpenSky part is committed but unverified**; awaiting the user's choice: test it on the laptop (card says "(OpenSky)" if it works) or remove it until verifiable. Times shown on a 24-hour clock regardless of browser language. |
 | 2026-10-31 | Aircraft icons: our own canvas silhouettes (not FlightScnr_Pi's images), chosen from the ADS-B emitter category plus short lists of turboprop, helicopter and wide-body type codes. Not animated: the user didn't want moving parts (FlightScnr_Pi spins helicopter rotors). No category and no listed type: a plain arrow rather than a guess. |
 
 ## Data sources: what we found
@@ -50,6 +52,8 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 | Map: `tile.openstreetmap.org` | 200 | `ACAO: *` | ⚠️ Every tile is an **"Access blocked"** placeholder (OSM tile usage policy). |
 | Map: Esri `server.arcgisonline.com/.../World_Street_Map` (and `World_Imagery`) | ✅ real tiles | ✅ `ACAO: *` | **In use.** No key. Esri Master License Agreement; attribution required (in `public/basemap.js`). "Mature support", **retires December 2029**; its replacement needs a key. Esri staff (2025): legacy basemaps work without a key; commercial use depends on the licence. URL order is `{z}/{y}/{x}`. |
 | `api.adsbdb.com/v0/aircraft/{hex}`, `/v0/callsign/{callsign}` | ✅ 200 | ✅ `ACAO: *` | **In use** for details. Free, no key; MIT code. ~512 requests/min per IP (from its source). 404 = unknown aircraft/callsign, 400 = invalid callsign. Route data © David J Taylor & Jim Mason: "may not be copied, published, or incorporated into other databases without explicit permission". Aircraft data: PlaneBase; photos: airport-data.com (attribution if shown; not used). The combined `/aircraft/{hex}?callsign=` endpoint 404s if *either* is unknown, so we make two requests. **Routes can be stale:** EZY86HP climbing out of Copenhagen westbound came back as LGW → FAO. |
+| OpenSky `opensky-network.org/api/tracks/all?icao24={hex}&time=0` | ✅ with curl; ❌ from Node `fetch` and `wrangler dev` (503 "upstream connect error or disconnect/reset before headers" after 15 s, with or without our User-Agent) | ❌ `ACAO` is opensky-network.org only → via the Worker | Returns the whole current flight: `path` = [time s, lat, lon, baro alt m, track, on ground]. "Purely experimental… can be out of order at any time". Anonymous: 400 credits/day per IP, a live track costs 4 (≈100 clicks/day); free account (OAuth2 client credentials) 4000/day. API docs: "research and non-commercial purposes", cite The OpenSky Network; the terms page returned 403. 404 = no track. Why Node/workerd fail while curl works is unknown; varying headers to find out was blocked (a curl-like User-Agent counts as bot-check circumvention). |
+| adsb.lol / adsb.fi trace files (`globe.adsb.lol/data/traces/…`, `globe.adsb.fi/…`) | ❌ 403 bot verification pages | | The files their map sites use; protected, so not usable. adsb.lol's documented API has no history endpoint. |
 | Natural Earth GeoJSON (`raw.githubusercontent.com/nvkelso/natural-earth-vector`) | ✅ | n/a | Public domain coastlines (10 MB), lakes, borders, airports. A keyless fallback for an outline map. |
 | Cloudflare `*.workers.dev` | ❓ | | The container's proxy refused a made-up subdomain; may or may not reach a real one. |
 
@@ -78,6 +82,8 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 - "Use my location" (geolocation) only works on https or `localhost`.
 - Icons are several canvas paths each; outline all parts, then fill each separately. One combined path would cut holes where mirrored parts overlap (fill winding rules).
 - On a phone the radar fills its square, so nothing can sit in its corners: the legend and attribution go underneath below 800 px.
+- Selected aircraft path: the browser check rebuilds the recorded path from the `/api/aircraft` responses and checks segment midpoints; it needs a moving aircraft and ~8 distinct positions (~40 s), and must skip ~22 px around each aircraft (icon + 17 px selection ring) and its label.
+- `toLocaleTimeString` without `hourCycle` gave "01:06 PM" in the container (en-US): set the clock format explicitly.
 - adsbdb's 404 for unknown aircraft is logged by Chromium as a console "error" even though the page handles it; the browser check ignores exactly those.
 - Icons overlap at airports: the browser check accepts the colour (or dark outline) of a neighbouring icon drawn on top.
 
@@ -131,6 +137,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 - Colour by altitude, with legend
 - Aircraft-type icons (own drawings, static)
 - Click a plane for details, with route and airframe from adsbdb
+- Path flown by the selected aircraft (recorded since page open; OpenSky history unverified)
 
 **Candidates: fit a laptop browser, no key**
 1. Military / twin-engine icon variants (need a type database, e.g. ICAO Doc 8643 descriptions; check licence)
@@ -143,7 +150,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 8. Precipitation overlay (LibreWXR / RainViewer; check terms and CORS)
 9. ISS on the radar and an ISS tracker (wheretheiss.at, no key)
 10. Arrivals/departures board built from aircraft the radar sees (no schedule API)
-11. Trails behind aircraft; favourite locations; tracked-flight / follow view
+11. Short trails behind every aircraft (the recording is already there); favourite locations; tracked-flight / follow view
 12. Earthquakes (USGS, no key)
 13. Other map styles: Esri satellite (no key), Natural Earth outlines (no key)
 14. Route line on the radar towards the destination (adsbdb gives airport coordinates)
@@ -168,8 +175,12 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-10-31 | Notes (this file) and `scripts/browser-check.cjs` added to the repo. |
 | 2026-10-31 | Colour by altitude (legend, list swatches) and aircraft-type icons. |
 | 2026-10-31 | Click a plane for details: adsbdb route and airframe, live data, stale-route warning. `src/geo.js` moved to `public/geo.js` (shared by page and Worker). |
+| 2026-10-31 | Path flown by the selected aircraft: recorded positions (verified) + OpenSky history via `/api/track` (unverified here). |
 
 ## Open questions
+
+- Does OpenSky's track load from the laptop (`npm run dev`) and from Cloudflare? It fails from Claude's container (Node/workerd only). User to test; decide keep or remove.
+- OpenSky's terms of use page couldn't be read (403).
 
 - Do adsb.lol / adsb.fi accept requests from Cloudflare? (Check at the first deploy.)
 - Esri's terms summary page couldn't be loaded; the exact conditions for keyless use are unconfirmed.

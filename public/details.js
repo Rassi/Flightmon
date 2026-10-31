@@ -12,6 +12,7 @@ const TIMEOUT_MS = 8000;
 export const CREDIT =
   'Route and aircraft data: adsbdb.com. Routes by David J Taylor (Edinburgh) and Jim Mason; ' +
   'aircraft data from PlaneBase.';
+export const TRACK_CREDIT = 'Flight path: The OpenSky Network, opensky-network.org.';
 
 // adsbdb's `response` field, or null when it doesn't know the aircraft or callsign.
 async function get(url, fetchFn) {
@@ -122,9 +123,21 @@ function airportBlock(p) {
   return div;
 }
 
-// `info`: undefined while loading, else lookup()'s result. `seen`: whether
-// the aircraft was in the latest update.
-export function renderDetails(container, { ac, info, seen, onClose }) {
+// 24-hour clock, whatever the browser's language.
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+// What the path on the radar covers, in words.
+export function pathText(track, trail) {
+  if (track === undefined) return 'loading…';
+  if (!trail || trail.length < 2) return 'not enough positions yet';
+  const from = track.path?.length ? 'OpenSky' : 'recorded here';
+  return `since ${clock(trail[0].t)} (${from})`;
+}
+
+// `info`: undefined while loading, else lookup()'s result. `track`: OpenSky's
+// path ({ path } or { error }; undefined while loading). `trail`: the path drawn.
+// `seen`: whether the aircraft was in the latest update.
+export function renderDetails(container, { ac, info, track, trail, seen, onClose }) {
   const head = el('div', 'details-head');
   const title = el('div');
   title.append(el('h2', null, displayName(ac)));
@@ -154,6 +167,7 @@ export function renderDetails(container, { ac, info, seen, onClose }) {
   }
   if (info?.errors.length) parts.push(el('p', 'note warn', `Couldn't look up details: ${info.errors.join('; ')}`));
   if (!seen) parts.push(el('p', 'note warn', 'Not in the latest update; showing the last position.'));
+  if (track?.error) parts.push(el('p', 'note', `Earlier path unavailable (${track.error}); showing it since the page opened.`));
 
   const a = info?.aircraft;
   const facts = [
@@ -164,6 +178,7 @@ export function renderDetails(container, { ac, info, seen, onClose }) {
     ['Speed', formatSpeed(ac.speedKmh)],
     ['Heading', ac.trackDeg === null ? null : `${Math.round(ac.trackDeg) % 360}°`],
     ['Position', `${formatDistance(ac.distKm)} ${formatDirection(ac.bearingDeg)}`],
+    ['Path flown', pathText(track, trail)],
     ['Squawk', ac.squawk],
     ['ICAO address', ac.hex.toUpperCase()],
   ];
@@ -173,6 +188,9 @@ export function renderDetails(container, { ac, info, seen, onClose }) {
     dl.append(el('dt', null, k), el('dd', null, v));
   }
   parts.push(dl);
-  if (info && (info.aircraft || info.route)) parts.push(el('p', 'credit', CREDIT));
+  const credits = [];
+  if (info && (info.aircraft || info.route)) credits.push(CREDIT);
+  if (track?.path?.length) credits.push(TRACK_CREDIT);
+  if (credits.length) parts.push(el('p', 'credit', credits.join(' ')));
   container.replaceChildren(...parts);
 }

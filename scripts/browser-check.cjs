@@ -43,14 +43,17 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     // adsbdb answers 404/400 for aircraft and callsigns it doesn't know; the page
     // handles that, but Chromium still logs the status.
     if (/api\.adsbdb\.com/.test(m.location().url) && /status of 40[04]/.test(m.text())) return;
+    // /api/track answers 404/429/502 when OpenSky has no track or fails; the card says so.
+    if (/\/api\/track\?/.test(m.location().url) && /status of (404|429|502)/.test(m.text())) return;
     errors.push(`${m.text()} (${m.location().url})`);
   });
   page.on('pageerror', (e) => errors.push(String(e)));
   let lastApi = null; let apiCalls = 0;
+  const apiHistory = []; // every /api/aircraft response, to rebuild what the page recorded
   const tiles = { ok: 0, bad: [] };
   page.on('response', (r) => { if (r.url().includes('arcgisonline.com')) { if (r.status() === 200 && /image\//.test(r.headers()['content-type'] || '')) tiles.ok++; else tiles.bad.push(r.status() + ' ' + r.url()); } });
   page.on('requestfailed', (r) => { if (r.url().includes('arcgisonline.com')) tiles.bad.push('failed ' + r.failure()?.errorText + ' ' + r.url()); });
-  page.on('response', async (r) => { if (r.url().includes('/api/aircraft') && r.ok()) { apiCalls++; lastApi = await r.json(); } });
+  page.on('response', async (r) => { if (r.url().includes('/api/aircraft') && r.ok()) { apiCalls++; lastApi = await r.json(); apiHistory.push(lastApi); } });
 
   console.log('1. First visit, no location');
   await page.goto(BASE + '/');
@@ -148,13 +151,19 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   {
     const adsbdb = [];
     // Record responses as they arrive (bodies are read later, so none is missed).
-    const onResp = (r) => { if (r.url().includes('api.adsbdb.com')) adsbdb.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) }); };
+    const tracks = [];
+    const onResp = (r) => {
+      if (r.url().includes('api.adsbdb.com')) adsbdb.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) });
+      if (r.url().includes('/api/track?')) tracks.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) });
+    };
     page.on('response', onResp);
     const dims2 = await page.$eval('#radar', (c) => { const b = c.getBoundingClientRect(); return { w: c.clientWidth, h: c.clientHeight, x: b.x, y: b.y }; });
     const center = { lat: 55.6761, lon: 12.5683 };
     const placed = lastApi.aircraft.map((a) => ({ a, ...expectedXY(a, center, 50, dims2.w, dims2.h) }));
     // An airborne aircraft with a callsign and no other aircraft within 30 px, so the click is unambiguous.
-    const target = placed.find((p) => p.a.callsign && !p.a.onGround && placed.every((q) => q === p || Math.hypot(q.x - p.x, q.y - p.y) > 30));
+    // Prefer a fast one, so its recorded path grows quickly enough to check.
+    const separate = placed.filter((p) => p.a.callsign && !p.a.onGround && placed.every((q) => q === p || Math.hypot(q.x - p.x, q.y - p.y) > 30));
+    const target = separate.find((p) => p.a.speedKmh > 350) ?? separate[0];
     if (!target) {
       check(false, 'no clearly separate airborne aircraft with a callsign to click');
     } else {
@@ -185,6 +194,77 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const now = expectedXY(lastApi.aircraft.find((a) => a.hex === target.a.hex) ?? target.a, center, 50, dims2.w, dims2.h);
       const sel = await page.evaluate(({ x, y }) => Array.from(document.getElementById('radar').getContext('2d').getImageData(Math.round(x * devicePixelRatio), Math.round(y * devicePixelRatio), 1, 1).data), now);
       check(sel[0] > 230 && sel[1] > 230 && sel[2] > 230, `selected aircraft drawn white on the radar: rgba(${sel})`);
+
+      // The path flown: OpenSky's part (before the page opened) drawn in altitude colours.
+      await page.waitForFunction(() => !/loading/.test(document.querySelector('#details')?.textContent.split('Path flown')[1] ?? 'loading'), null, { timeout: 15000 });
+      const tr = tracks.find((t) => t.url.endsWith('hex=' + target.a.hex));
+      const trBody = tr && await tr.json;
+      const pathFact = await page.evaluate(() => { const dts = [...document.querySelectorAll('#details dt')]; const dt = dts.find((d) => d.textContent === 'Path flown'); return dt ? dt.nextElementSibling.textContent : null; });
+      if (tr && tr.status === 200 && trBody.path.length > 1) {
+        check(/^since \d\d[:.]\d\d \(OpenSky\)$/.test(pathFact) && (await page.textContent('#details')).includes('The OpenSky Network'), `track from OpenSky: ${trBody.path.length} points, card says "${pathFact}", credited`);
+        await page.waitForTimeout(300);
+        const pageOpened = Date.now() / 1000 - 60;
+        const radius = Math.min(dims2.w, dims2.h) / 2 - 28;
+        const nowList = lastApi.aircraft.map((a) => expectedXY(a, center, 50, dims2.w, dims2.h));
+        const free = (m) => Math.hypot(m.x - dims2.w / 2, m.y - dims2.h / 2) < radius - 4
+          && nowList.every((q) => Math.hypot(q.x - m.x, q.y - m.y) > 22 && !(m.x > q.x - 5 && m.x < q.x + 110 && Math.abs(m.y - q.y) < 12));
+        const mids = [];
+        for (let i = 1; i < trBody.path.length; i++) {
+          const a = trBody.path[i - 1], b = trBody.path[i];
+          if (b.t >= pageOpened) break;
+          const pa = expectedXY(a, center, 50, dims2.w, dims2.h), pb = expectedXY(b, center, 50, dims2.w, dims2.h);
+          const m = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, seg: a };
+          if (Math.hypot(pb.x - pa.x, pb.y - pa.y) > 6 && free(m)) mids.push(m);
+        }
+        if (mids.length < 3) {
+          console.log(`   (only ${mids.length} checkable path segments inside the radar; colours not checked this run)`);
+        } else {
+          const got = await page.evaluate(({ mids }) => {
+            const ctx = document.getElementById('radar').getContext('2d'); const dpr = devicePixelRatio;
+            return mids.map((m) => { const d = ctx.getImageData(Math.round(m.x * dpr) - 2, Math.round(m.y * dpr) - 2, 4, 4).data; const out = []; for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]); return out; });
+          }, { mids });
+          const bad = mids.filter((m, i) => !got[i].some((q) => hexToRgb(altitudeColor(m.seg)).every((v, k) => Math.abs(v - q[k]) < 40)));
+          check(bad.length === 0, `path drawn where OpenSky says, in altitude colours: ${mids.length - bad.length}/${mids.length} segment midpoints` + (bad.length ? ' — off at ' + bad.map((m) => `${m.x.toFixed(0)},${m.y.toFixed(0)}`).join('; ') : ''));
+        }
+      } else {
+        const note = await page.textContent('#details');
+        check(note.includes('Earlier path unavailable') && /recorded here|not enough positions/.test(pathFact), `OpenSky gave no track (${tr?.status} ${trBody?.error}); card says so: "${pathFact}"`);
+        console.log('   (OpenSky part not verified this run)');
+      }
+
+      // The part recorded since the page opened: rebuild it from the responses the page got.
+      const positions = () => {
+        const seen = [];
+        for (const r of apiHistory) {
+          const a = r.aircraft.find((x) => x.hex === target.a.hex);
+          if (!a) continue;
+          const last = seen[seen.length - 1];
+          if (!last || last.lat !== a.lat || last.lon !== a.lon) seen.push(a);
+        }
+        return seen;
+      };
+      // Wait for 8 distinct positions (about 40 s), or up to 70 s.
+      for (let t = 0; t < 70 && positions().length < 8; t++) await page.waitForTimeout(1000);
+      await page.waitForTimeout(400);
+      {
+        const seen = positions();
+        const nowList = lastApi.aircraft.map((a) => expectedXY(a, center, 50, dims2.w, dims2.h));
+        const segs = [];
+        for (let i = 1; i < seen.length; i++) {
+          const pa = expectedXY(seen[i - 1], center, 50, dims2.w, dims2.h), pb = expectedXY(seen[i], center, 50, dims2.w, dims2.h);
+          const m = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, seg: seen[i - 1] };
+          // Skip what icons, the selection ring (17 px + outline) and labels cover.
+          const clear = nowList.every((q) => Math.hypot(q.x - m.x, q.y - m.y) > 22 && !(m.x > q.x + 8 && m.x < q.x + 110 && Math.abs(m.y - q.y) < 10));
+          if (Math.hypot(pb.x - pa.x, pb.y - pa.y) > 4 && clear) segs.push(m);
+        }
+        const got = await page.evaluate(({ segs }) => {
+          const ctx = document.getElementById('radar').getContext('2d'); const dpr = devicePixelRatio;
+          return segs.map((m) => { const d = ctx.getImageData(Math.round(m.x * dpr) - 2, Math.round(m.y * dpr) - 2, 4, 4).data; const out = []; for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]); return out; });
+        }, { segs });
+        const bad = segs.filter((m, i) => !got[i].some((q) => hexToRgb(altitudeColor(m.seg)).every((v, k) => Math.abs(v - q[k]) < 40)));
+        await page.screenshot({ path: OUT + '/trail.png' });
+        check(segs.length >= 2 && bad.length === 0, `recorded path drawn behind ${cs}: ${segs.length - bad.length}/${segs.length} segments (${seen.length} positions)` + (bad.length ? ' — off at ' + bad.map((m) => `${m.x.toFixed(0)},${m.y.toFixed(0)}`).join('; ') : ''));
+      }
       await page.screenshot({ path: OUT + '/details.png' });
 
       // Wait for an actual refresh (5 s after the previous one finished, plus the feed's response time).

@@ -23,6 +23,10 @@ Inspired by [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi)
   heading, position and squawk. A route that doesn't fit the aircraft's
   position is flagged as possibly out of date. Click empty radar, ✕ or Esc to
   close.
+- **Path flown**: the selected aircraft's path is drawn behind it in altitude
+  colours: recorded by the page since it opened, with the earlier part of the
+  flight from [OpenSky](https://opensky-network.org) when available (see the
+  notes: not yet verified).
 - **Units**: metric (m, km/h, km).
 
 ## How it works
@@ -37,7 +41,7 @@ metric list sorted by distance.
 
 ```
 src/worker.js       Worker entry point (routing only)
-src/api.js          /api/aircraft: parameters, feed fallback
+src/api.js          /api/aircraft (feed fallback) and /api/track (OpenSky)
 src/aircraft.js     feed data → the list the page needs
 public/app.js       the page: location, polling, list
 public/radar.js     drawing the radar
@@ -46,6 +50,8 @@ public/altitude.js  colour by altitude
 public/mercator.js  map projection
 public/basemap.js   map tiles
 public/details.js   the details card, adsbdb lookups
+public/trails.js    recording where aircraft have flown
+src/track.js        /api/track: OpenSky's path so far
 public/geo.js       distance and bearing (shared with the Worker)
 ```
 

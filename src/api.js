@@ -1,7 +1,9 @@
-// GET /api/aircraft?lat=&lon=&radius= (radius in km). The browser can't call
-// the feeds itself because they send no CORS headers, so the Worker does.
+// GET /api/aircraft?lat=&lon=&radius= (radius in km), and
+// GET /api/track?hex= (the path flown so far, from OpenSky). The browser can't
+// call these services itself (no CORS headers for other sites), so the Worker does.
 
 import { normalize } from './aircraft.js';
+import { normalizeTrack } from './track.js';
 
 const USER_AGENT = 'Flightmon (+https://github.com/rassi/flightmon)';
 const TIMEOUT_MS = 8000;
@@ -63,4 +65,33 @@ export async function getAircraft(url) {
     }
   }
   return json({ error: 'No flight feed answered', failures }, 502);
+}
+
+// OpenSky's tracks endpoint is "purely experimental". Anonymous use is limited
+// per IP address (400 credits a day; a live track costs 4).
+const trackUrl = (hex) => `https://opensky-network.org/api/tracks/all?icao24=${hex}&time=0`;
+
+export async function getTrack(url) {
+  const hex = (url.searchParams.get('hex') || '').toLowerCase();
+  if (!/^[0-9a-f]{6}$/.test(hex)) return json({ error: 'hex must be a 6-digit ICAO address' }, 400);
+
+  let res;
+  try {
+    res = await fetch(trackUrl(hex), {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    return json({ error: `OpenSky didn't answer: ${err.message}` }, 502);
+  }
+  const remaining = Number(res.headers.get('x-rate-limit-remaining'));
+  const extra = Number.isFinite(remaining) && res.headers.has('x-rate-limit-remaining') ? { remaining } : {};
+  if (res.status === 404) return json({ error: 'OpenSky has no track for this aircraft', ...extra }, 404);
+  if (res.status === 429) return json({ error: "OpenSky's daily limit for this connection is used up", ...extra }, 429);
+  if (!res.ok) return json({ error: `OpenSky answered HTTP ${res.status}` }, 502);
+  try {
+    return json({ source: 'OpenSky', ...normalizeTrack(await res.json()), ...extra });
+  } catch (err) {
+    return json({ error: `OpenSky: ${err.message}` }, 502);
+  }
 }
