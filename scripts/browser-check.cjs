@@ -27,7 +27,7 @@ function expectedXY(a, center, range, w, h) {
   const p = merc(a.lat, a.lon), c = merc(center.lat, center.lon);
   return { x: w / 2 + p.x - c.x, y: h / 2 + p.y - c.y };
 }
-const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) failures++; };
+const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) failures++; return ok; };
 
 (async () => {
   const { altitudeColor } = await import(require('node:url').pathToFileURL(require('node:path').join(__dirname, '../public/altitude.js')));
@@ -38,7 +38,13 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     geolocation: { latitude: 55.618, longitude: 12.656 }, permissions: ['geolocation'] });
   const page = await context.newPage();
   const errors = [];
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    // adsbdb answers 404/400 for aircraft and callsigns it doesn't know; the page
+    // handles that, but Chromium still logs the status.
+    if (/api\.adsbdb\.com/.test(m.location().url) && /status of 40[04]/.test(m.text())) return;
+    errors.push(`${m.text()} (${m.location().url})`);
+  });
   page.on('pageerror', (e) => errors.push(String(e)));
   let lastApi = null; let apiCalls = 0;
   const tiles = { ok: 0, bad: [] };
@@ -137,6 +143,76 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   check(await page.$eval(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`, (tr) => tr.classList.contains('highlight')), 'row highlighted');
   await page.screenshot({ path: OUT + '/radar-hover.png' });
   await page.mouse.move(5, 5);
+
+  console.log('5b. Click a plane for details (route from adsbdb)');
+  {
+    const adsbdb = [];
+    // Record responses as they arrive (bodies are read later, so none is missed).
+    const onResp = (r) => { if (r.url().includes('api.adsbdb.com')) adsbdb.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) }); };
+    page.on('response', onResp);
+    const dims2 = await page.$eval('#radar', (c) => { const b = c.getBoundingClientRect(); return { w: c.clientWidth, h: c.clientHeight, x: b.x, y: b.y }; });
+    const center = { lat: 55.6761, lon: 12.5683 };
+    const placed = lastApi.aircraft.map((a) => ({ a, ...expectedXY(a, center, 50, dims2.w, dims2.h) }));
+    // An airborne aircraft with a callsign and no other aircraft within 30 px, so the click is unambiguous.
+    const target = placed.find((p) => p.a.callsign && !p.a.onGround && placed.every((q) => q === p || Math.hypot(q.x - p.x, q.y - p.y) > 30));
+    if (!target) {
+      check(false, 'no clearly separate airborne aircraft with a callsign to click');
+    } else {
+      const cs = target.a.callsign;
+      await page.mouse.click(dims2.x + target.x, dims2.y + target.y);
+      await page.waitForSelector('#details:not([hidden]) h2');
+      check((await page.textContent('#details h2')) === cs, `clicked ${cs}: details open`);
+      await page.waitForFunction(() => !document.querySelector('#details').textContent.includes('Looking up'), null, { timeout: 15000 });
+      for (const r of adsbdb) r.body = await r.json;
+      const routeResp = adsbdb.find((r) => r.url.endsWith('/callsign/' + encodeURIComponent(cs)));
+      const acResp = adsbdb.find((r) => r.url.endsWith('/aircraft/' + target.a.hex));
+      const asked = check(Boolean(routeResp && acResp), `asked adsbdb for /callsign/${cs} (${routeResp?.status}) and /aircraft/${target.a.hex} (${acResp?.status})`);
+      if (!asked) console.log('     adsbdb responses seen:', adsbdb.map((r) => `${r.status} ${r.url}`).join(', ') || 'none', '\n     card:', await page.textContent('#details'));
+      const text = await page.textContent('#details');
+      const fr = routeResp?.body?.response?.flightroute;
+      if (fr) {
+        const o = fr.origin.iata_code || fr.origin.icao_code, d = fr.destination.iata_code || fr.destination.icao_code;
+        const codes = await page.$$eval('#details .airport .code', (els) => els.map((e) => e.textContent));
+        check(codes.join('→') === `${o}→${d}`, `route shown as adsbdb gave it: ${codes.join(' → ')} (${fr.origin.municipality} → ${fr.destination.municipality})`);
+        check(text.includes('adsbdb.com') && text.includes('David J Taylor'), 'adsbdb and route data credited');
+      } else {
+        check(text.includes(`No route known for ${cs}`), `no route known for ${cs} (adsbdb: ${routeResp?.status} ${JSON.stringify(routeResp?.body?.response)})`);
+      }
+      const reg = acResp?.body?.response?.aircraft?.registration;
+      if (reg) check(text.includes(reg), `aircraft details from adsbdb shown (registration ${reg})`);
+      check(await page.$eval(`#aircraft tbody tr[data-hex="${target.a.hex}"]`, (tr) => tr.classList.contains('selected')), 'its list row is marked selected');
+      // Where it is now: the page may have refreshed since the click.
+      const now = expectedXY(lastApi.aircraft.find((a) => a.hex === target.a.hex) ?? target.a, center, 50, dims2.w, dims2.h);
+      const sel = await page.evaluate(({ x, y }) => Array.from(document.getElementById('radar').getContext('2d').getImageData(Math.round(x * devicePixelRatio), Math.round(y * devicePixelRatio), 1, 1).data), now);
+      check(sel[0] > 230 && sel[1] > 230 && sel[2] > 230, `selected aircraft drawn white on the radar: rgba(${sel})`);
+      await page.screenshot({ path: OUT + '/details.png' });
+
+      // Wait for an actual refresh (5 s after the previous one finished, plus the feed's response time).
+      const n = apiCalls;
+      for (let t = 0; t < 24 && apiCalls === n; t++) await page.waitForTimeout(500);
+      await page.waitForTimeout(300);
+      const h2 = await page.textContent('#details h2');
+      check(apiCalls > n && h2 === cs, `after a refresh the details still follow ${cs} (${apiCalls - n} refreshes; card shows ${h2})`);
+      const before = adsbdb.length;
+      // Click a list row: details for that aircraft (a second click on the same is cached: no new requests).
+      await page.click(`#aircraft tbody tr[data-hex="${target.a.hex}"]`);
+      check(adsbdb.length === before, 'same aircraft again: no new adsbdb requests');
+
+      // Click an empty spot on the radar: details close.
+      const empty = [[0.5, 0.15], [0.2, 0.5], [0.8, 0.5], [0.5, 0.85]].map(([fx, fy]) => ({ x: dims2.w * fx, y: dims2.h * fy }))
+        .find((pt) => placed.every((q) => Math.hypot(q.x - pt.x, q.y - pt.y) > 40));
+      await page.mouse.click(dims2.x + empty.x, dims2.y + empty.y);
+      check(await page.$eval('#details', (e) => e.hidden), 'click on empty radar closes the details');
+
+      const other = lastApi.aircraft.find((a) => a.hex !== target.a.hex) || target.a;
+      await page.click(`#aircraft tbody tr[data-hex="${other.hex}"]`);
+      await page.waitForSelector('#details:not([hidden]) h2');
+      check((await page.textContent('#details h2')) === (other.callsign ?? other.reg ?? other.hex.toUpperCase()), `click a list row: details for ${other.callsign ?? other.reg ?? other.hex}`);
+      await page.keyboard.press('Escape');
+      check(await page.$eval('#details', (e) => e.hidden), 'Esc closes the details');
+    }
+    page.off('response', onResp);
+  }
 
   console.log('6. Use my location (geolocation mocked to CPH airport 55.618, 12.656)');
   await page.fill('#range', '20');

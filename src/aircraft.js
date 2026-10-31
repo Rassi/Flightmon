@@ -1,7 +1,7 @@
 // Turns a readsb-style response (adsb.lol, adsb.fi) into the small, metric
 // list the page needs, sorted by distance from the centre.
 
-import { bearingDeg, distanceKm } from './geo.js';
+import { bearingDeg, distanceKm } from '../public/geo.js';
 
 const FT_TO_M = 0.3048;
 const KT_TO_KMH = 1.852;

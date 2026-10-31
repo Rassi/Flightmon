@@ -3,7 +3,7 @@
 // and scaled so that `rangeKm` at the centre spans `radiusPx`.
 
 const MERCATOR_RADIUS_KM = 6378.137; // the sphere Web Mercator is defined on
-const EARTH_RADIUS_KM = 6371.0088; // mean radius, for distances (as src/geo.js)
+const EARTH_RADIUS_KM = 6371.0088; // mean radius, for distances (as geo.js)
 const toRad = (deg) => (deg * Math.PI) / 180;
 const toDeg = (rad) => (rad * 180) / Math.PI;
 

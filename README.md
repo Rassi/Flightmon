@@ -17,6 +17,12 @@ Inspired by [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi)
 - **List**: callsign and registration, type, altitude (with ↑/↓ when climbing
   or descending), ground speed, distance and direction. Hover a row to find the
   aircraft on the radar.
+- **Details**: click an aircraft on the radar or in the list for its route
+  (airline, origin → destination) and airframe (model, registration, owner),
+  from [adsbdb](https://www.adsbdb.com/), plus its live altitude, speed,
+  heading, position and squawk. A route that doesn't fit the aircraft's
+  position is flagged as possibly out of date. Click empty radar, ✕ or Esc to
+  close.
 - **Units**: metric (m, km/h, km).
 
 ## How it works
@@ -33,13 +39,14 @@ metric list sorted by distance.
 src/worker.js       Worker entry point (routing only)
 src/api.js          /api/aircraft: parameters, feed fallback
 src/aircraft.js     feed data → the list the page needs
-src/geo.js          distance and bearing
 public/app.js       the page: location, polling, list
 public/radar.js     drawing the radar
 public/icons.js     aircraft icons
 public/altitude.js  colour by altitude
 public/mercator.js  map projection
 public/basemap.js   map tiles
+public/details.js   the details card, adsbdb lookups
+public/geo.js       distance and bearing (shared with the Worker)
 ```
 
 The map is [Esri World Street Map](https://www.arcgis.com/home/item.html?id=3b93337983e9436f8db950e38a8629af),
@@ -49,6 +56,12 @@ to retire it in December 2029; the tile source is all in `public/basemap.js`.
 The map, the aircraft and the rings are all drawn in the map's projection
 (Web Mercator), so they line up exactly; the rings are true distance circles.
 `--map-opacity` in `style.css` sets how strongly the map shows.
+
+Routes and airframe details come from [adsbdb](https://www.adsbdb.com/),
+which the browser asks directly (it allows that), only when an aircraft is
+clicked. Its route data is by David J Taylor (Edinburgh) and Jim Mason and
+may not be copied, published or put into other databases, so the page only
+shows it and keeps it in memory while open; aircraft data is from PlaneBase.
 
 Altitudes are pressure altitudes, as the feeds report them, so a plane close to
 the ground can show a few metres below zero on a high-pressure day. Airport

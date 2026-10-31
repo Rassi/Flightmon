@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { drawBasemap, tileZoom } from '../public/basemap.js';
 import { destination, makeView, ringPoints, worldPixel } from '../public/mercator.js';
-import { bearingDeg, distanceKm } from '../src/geo.js';
+import { bearingDeg, distanceKm } from '../public/geo.js';
 
 const CPH = { lat: 55.6761, lon: 12.5683 };
 const near = (a, b, tol) => Math.abs(a - b) <= tol;

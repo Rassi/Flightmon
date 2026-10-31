@@ -134,6 +134,49 @@ th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: no
 tr.ground td { color: var(--muted); }
 tr.emergency td { color: var(--alert); }
 tbody tr.highlight td { background: #1a2a24; color: var(--row-highlight); }
+tbody tr { cursor: pointer; }
+tbody tr.selected td { background: #15302a; }
+tbody tr.selected td:first-child { box-shadow: inset 3px 0 var(--accent); }
+
+.details {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.details-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.details h2 { margin: 0; font-size: 20px; }
+.details .sub { margin: 2px 0 0; color: var(--muted); }
+.details .close {
+  padding: 2px 8px;
+  border-color: var(--line);
+  color: var(--muted);
+}
+.route {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  gap: 10px;
+  margin: 12px 0 4px;
+}
+.route .arrow { font-size: 20px; color: var(--muted); padding-top: 2px; }
+.airport { display: flex; flex-direction: column; min-width: 0; }
+.airport .code { font-size: 22px; font-weight: 700; letter-spacing: 0.03em; }
+.airport .place { font-size: 12px; }
+.airport .where { font-size: 12px; color: var(--muted); }
+.details .note { margin: 10px 0 0; color: var(--muted); }
+.details .note.warn { color: var(--row-highlight); }
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 14px;
+  margin: 12px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+.details .credit { margin: 10px 0 0; color: var(--muted); font-size: 10px; }
 .swatch {
   display: inline-block;
   width: 9px;

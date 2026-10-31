@@ -31,6 +31,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | FlightScnr / FlightScnr_Pi are not a starting point for the code: different platforms (Python/pygame on a Pi; C++ on an ESP32) and licence conditions (attribution, non-commercial, share-alike). Used as a feature catalogue. |
 | 2026-10-31 | Notes live in this file, in the repo, so every new session has them. |
 | 2026-10-31 | Colour by altitude: our own scale (hue by altitude: orange 0 m → yellow 1.5 km → green 3 km → cyan 6 km → blue 9 km → magenta 12 km), always on, with a legend and a swatch per list row. Ground grey, unknown altitude light grey, emergencies red. The highlighted aircraft is white with a ring (yellow is now an altitude colour); list rows keep a yellow highlight. |
+| 2026-10-31 | Click for details: click a plane (radar or list) → a card above the list with the adsbdb route and airframe plus live data; ✕ / empty click / Esc closes. The browser calls adsbdb directly (CORS allowed), only on click; answers kept in memory for the page only (route data may not be copied or stored). Credit shown on the card. Routes that don't fit the aircraft's position are shown with a warning, not hidden. No route line on the radar (not asked for). |
 | 2026-10-31 | Aircraft icons: our own canvas silhouettes (not FlightScnr_Pi's images), chosen from the ADS-B emitter category plus short lists of turboprop, helicopter and wide-body type codes. Not animated: the user didn't want moving parts (FlightScnr_Pi spins helicopter rotors). No category and no listed type: a plain arrow rather than a guess. |
 
 ## Data sources: what we found
@@ -48,6 +49,7 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 | Map: CARTO (`basemaps.cartocdn.com`) | 200 | `ACAO: *` | ⚠️ Every tile is an **"API KEY REQUIRED"** placeholder. Free key: carto.com/basemaps/apikey. |
 | Map: `tile.openstreetmap.org` | 200 | `ACAO: *` | ⚠️ Every tile is an **"Access blocked"** placeholder (OSM tile usage policy). |
 | Map: Esri `server.arcgisonline.com/.../World_Street_Map` (and `World_Imagery`) | ✅ real tiles | ✅ `ACAO: *` | **In use.** No key. Esri Master License Agreement; attribution required (in `public/basemap.js`). "Mature support", **retires December 2029**; its replacement needs a key. Esri staff (2025): legacy basemaps work without a key; commercial use depends on the licence. URL order is `{z}/{y}/{x}`. |
+| `api.adsbdb.com/v0/aircraft/{hex}`, `/v0/callsign/{callsign}` | ✅ 200 | ✅ `ACAO: *` | **In use** for details. Free, no key; MIT code. ~512 requests/min per IP (from its source). 404 = unknown aircraft/callsign, 400 = invalid callsign. Route data © David J Taylor & Jim Mason: "may not be copied, published, or incorporated into other databases without explicit permission". Aircraft data: PlaneBase; photos: airport-data.com (attribution if shown; not used). The combined `/aircraft/{hex}?callsign=` endpoint 404s if *either* is unknown, so we make two requests. **Routes can be stale:** EZY86HP climbing out of Copenhagen westbound came back as LGW → FAO. |
 | Natural Earth GeoJSON (`raw.githubusercontent.com/nvkelso/natural-earth-vector`) | ✅ | n/a | Public domain coastlines (10 MB), lakes, borders, airports. A keyless fallback for an outline map. |
 | Cloudflare `*.workers.dev` | ❓ | | The container's proxy refused a made-up subdomain; may or may not reach a real one. |
 
@@ -76,12 +78,14 @@ Checked from Claude's cloud container (2026-10-30/31) with curl and with
 - "Use my location" (geolocation) only works on https or `localhost`.
 - Icons are several canvas paths each; outline all parts, then fill each separately. One combined path would cut holes where mirrored parts overlap (fill winding rules).
 - On a phone the radar fills its square, so nothing can sit in its corners: the legend and attribution go underneath below 800 px.
+- adsbdb's 404 for unknown aircraft is logged by Chromium as a console "error" even though the page handles it; the browser check ignores exactly those.
 - Icons overlap at airports: the browser check accepts the colour (or dark outline) of a neighbouring icon drawn on top.
 
 **Verifying**
 - Do the arithmetic in code, not in your head: two "failing" tests (a tile number, an antimeridian offset) were wrong expectations, not wrong code.
 - Look at the screenshots. They caught what the checks didn't: `@@@@@@@@` callsigns, cluttered airport labels, overlapping layout, tile seams, placeholder tiles.
 - When a test only runs under a condition (e.g. "if zoom is 10"), check the condition actually holds, or the test silently checks nothing.
+- Races in the browser check: record responses synchronously (read bodies afterwards), use the aircraft's *current* position after waiting (a jet moves ~10 px between refreshes at 50 km), and wait for an actual refresh rather than a fixed time (refresh = 5 s after the previous fetch finished, plus feed latency). A failure that doesn't reproduce: add diagnostics before re-running, don't just re-run.
 - Playwright reports no `response` for a request the browser blocked for CORS; read the real status over the DevTools protocol (`Network.responseReceivedExtraInfo`).
 
 **The cloud container**
@@ -126,26 +130,27 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 - Location: typed, pasted "lat, lon", or the browser's; remembered and in the URL
 - Colour by altitude, with legend
 - Aircraft-type icons (own drawings, static)
+- Click a plane for details, with route and airframe from adsbdb
 
 **Candidates: fit a laptop browser, no key**
-1. Click a plane for details (registration, type, speed, squawk…), with route from adsbdb (free; check it's reachable first)
-2. Military / twin-engine icon variants (need a type database, e.g. ICAO Doc 8643 descriptions; check licence)
-3. Altitude / speed filters; zoom with mouse wheel or keys
-4. Clock and weather (Open-Meteo, works directly from the browser); air quality (Open-Meteo)
-5. Aircraft just outside the range shown on the rim
-6. Tag options: flight number / callsign / registration; leader lines
-7. Animated radar sweep (left out of the minimal start on purpose)
-8. Airports and runways overlay (OurAirports open data)
-9. Precipitation overlay (LibreWXR / RainViewer; check terms and CORS)
-10. ISS on the radar and an ISS tracker (wheretheiss.at, no key)
-11. Arrivals/departures board built from aircraft the radar sees (no schedule API)
-12. Trails behind aircraft; favourite locations; tracked-flight / follow view
-13. Earthquakes (USGS, no key)
-14. Other map styles: Esri satellite (no key), Natural Earth outlines (no key)
+1. Military / twin-engine icon variants (need a type database, e.g. ICAO Doc 8643 descriptions; check licence)
+2. Altitude / speed filters; zoom with mouse wheel or keys
+3. Clock and weather (Open-Meteo, works directly from the browser); air quality (Open-Meteo)
+4. Aircraft just outside the range shown on the rim
+5. Tag options: flight number / callsign / registration; leader lines
+6. Animated radar sweep (left out of the minimal start on purpose)
+7. Airports and runways overlay (OurAirports open data)
+8. Precipitation overlay (LibreWXR / RainViewer; check terms and CORS)
+9. ISS on the radar and an ISS tracker (wheretheiss.at, no key)
+10. Arrivals/departures board built from aircraft the radar sees (no schedule API)
+11. Trails behind aircraft; favourite locations; tracked-flight / follow view
+12. Earthquakes (USGS, no key)
+13. Other map styles: Esri satellite (no key), Natural Earth outlines (no key)
+14. Route line on the radar towards the destination (adsbdb gives airport coordinates)
 
 **Need a key, payment, or checking first**
 - Aircraft photos: planespotters (refused generic requests from here; test in a real browser), Wikimedia Commons fallback
-- Routes / airline details: FR24 (paid), AirLabs, FlightAware (paid per call); adsbdb (free) is the first to try
+- Better routes: FR24 (paid), AirLabs, FlightAware (paid per call). adsbdb (free) is in use but can be stale
 - CARTO / Stadia map styles (free keys)
 - Ships (aisstream.io free key; Open Waters fallback without key), wildfires outside the US (NASA FIRMS free key)
 
@@ -162,6 +167,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-10-31 | Map at full opacity. |
 | 2026-10-31 | Notes (this file) and `scripts/browser-check.cjs` added to the repo. |
 | 2026-10-31 | Colour by altitude (legend, list swatches) and aircraft-type icons. |
+| 2026-10-31 | Click a plane for details: adsbdb route and airframe, live data, stale-route warning. `src/geo.js` moved to `public/geo.js` (shared by page and Worker). |
 
 ## Open questions
 

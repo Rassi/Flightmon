@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { bearingDeg, distanceKm } from '../src/geo.js';
+import { bearingDeg, distanceKm } from '../public/geo.js';
 
 const CPH = { lat: 55.6761, lon: 12.5683 };
 const fixture = (name) => JSON.parse(readFileSync(new URL(`fixtures/${name}`, import.meta.url)));

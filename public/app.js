@@ -1,6 +1,7 @@
 import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.js';
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
-import { drawRadar } from './radar.js';
+import { lookup, renderDetails } from './details.js';
+import { drawRadar, hitTest } from './radar.js';
 import {
   climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
 } from './format.js';
@@ -21,6 +22,7 @@ const els = {
   canvas: $('radar'),
   attribution: $('attribution'),
   legend: $('legend'),
+  details: $('details'),
   status: $('status'),
   rows: document.querySelector('#aircraft tbody'),
   empty: $('empty'),
@@ -32,7 +34,11 @@ const state = {
   lastOk: 0,
   error: null,
   highlight: null, // hex of the aircraft under the pointer in the list
+  selected: null, // the clicked aircraft, as last seen; its details are shown
+  info: undefined, // adsbdb lookup for the selected aircraft (undefined while loading)
 };
+
+let lastView = null; // the radar's projection as last drawn, for clicks
 
 // --- location ---------------------------------------------------------------
 
@@ -69,6 +75,7 @@ function useLocation(loc) {
   state.data = null;
   state.error = null;
   state.highlight = null;
+  state.selected = null;
   fillForm(loc);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
@@ -200,13 +207,13 @@ function drawCanvas() {
     return;
   }
   const colors = cssColors();
-  drawRadar(ctx, {
+  lastView = drawRadar(ctx, {
     width,
     height,
     center: state.location,
     aircraft: aircraftInRange(),
     rangeKm: state.location.rangeKm,
-    highlight: state.highlight,
+    highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
     colors,
     background: (c, view) => drawBasemap(c, view, {
       dpr, opacity: colors.mapOpacity, dimColor: colors.halo, onLoad: queueDraw,
@@ -264,6 +271,7 @@ function renderList() {
     if (ac.onGround) tr.classList.add('ground');
     if (ac.emergency) tr.classList.add('emergency');
     if (ac.hex === state.highlight) tr.classList.add('highlight');
+    if (ac.hex === state.selected?.hex) tr.classList.add('selected');
 
     const name = cell(displayName(ac), 'name');
     if (ac.callsign && ac.reg) {
@@ -315,7 +323,41 @@ function renderStatus() {
   showStatus(parts.join(' · '), stale || Boolean(state.error));
 }
 
+// --- details of the selected aircraft ---------------------------------------
+
+function select(ac) {
+  if (state.selected?.hex === ac.hex) return;
+  state.selected = ac;
+  state.info = undefined;
+  render();
+  lookup(ac.hex, ac.callsign).then((info) => {
+    if (state.selected?.hex !== ac.hex) return; // another aircraft was chosen meanwhile
+    state.info = info;
+    renderSelected();
+  });
+}
+
+function deselect() {
+  if (!state.selected) return;
+  state.selected = null;
+  render();
+}
+
+function renderSelected() {
+  if (!state.selected) {
+    els.details.hidden = true;
+    els.details.replaceChildren();
+    return;
+  }
+  // Follow the aircraft with each update; keep its last position if it's gone.
+  const current = state.data?.aircraft.find((ac) => ac.hex === state.selected.hex);
+  if (current) state.selected = current;
+  renderDetails(els.details, { ac: state.selected, info: state.info, seen: Boolean(current), onClose: deselect });
+  els.details.hidden = false;
+}
+
 function render() {
+  renderSelected();
   drawCanvas();
   renderList();
   renderStatus();
@@ -328,10 +370,32 @@ els.rows.addEventListener('mouseover', (event) => {
   for (const tr of els.rows.children) tr.classList.toggle('highlight', tr.dataset.hex === hex);
   drawCanvas();
 });
+els.rows.addEventListener('click', (event) => {
+  const hex = event.target.closest('tr')?.dataset.hex;
+  const ac = hex && aircraftInRange().find((a) => a.hex === hex);
+  if (ac) select(ac);
+});
 els.rows.addEventListener('mouseleave', () => {
   state.highlight = null;
   for (const tr of els.rows.children) tr.classList.remove('highlight');
   drawCanvas();
+});
+
+// Click an aircraft on the radar for its details; click elsewhere to close them.
+function aircraftAt(event) {
+  if (!lastView) return null;
+  return hitTest(lastView, aircraftInRange(), event.offsetX, event.offsetY);
+}
+els.canvas.addEventListener('click', (event) => {
+  const ac = aircraftAt(event);
+  if (ac) select(ac);
+  else deselect();
+});
+els.canvas.addEventListener('mousemove', (event) => {
+  els.canvas.style.cursor = aircraftAt(event) ? 'pointer' : '';
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') deselect();
 });
 
 els.attribution.textContent = ATTRIBUTION;

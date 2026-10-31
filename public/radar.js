@@ -22,8 +22,25 @@ export function radarView(center, rangeKm, width, height) {
   return makeView(center, rangeKm, radius, width, height);
 }
 
+// The aircraft nearest to screen point (x, y), within `maxPx`; null if none.
+export function hitTest(view, aircraft, x, y, maxPx = 18) {
+  let best = null;
+  let bestD = maxPx;
+  for (const ac of aircraft) {
+    if (ac.distKm > view.rangeKm) continue;
+    const p = view.toScreen(ac.lat, ac.lon);
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d <= bestD) {
+      best = ac;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
 // `background(ctx, view)` draws the map; it is clipped to the outer ring.
-export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highlight, colors, background }) {
+// `highlight`: a Set of hex codes to draw white with a ring.
+export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highlight = new Set(), colors, background }) {
   ctx.clearRect(0, 0, width, height);
   const view = radarView(center, rangeKm, width, height);
   const outer = ringPoints(view, rangeKm);
@@ -40,7 +57,7 @@ export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highl
 
   // Ground traffic underneath, then airborne from low to high, highlight last.
   const order = [...aircraft].sort((a, b) =>
-    (a.hex === highlight) - (b.hex === highlight) ||
+    highlight.has(a.hex) - highlight.has(b.hex) ||
     (b.onGround - a.onGround) ||
     ((a.altM ?? 0) - (b.altM ?? 0)));
 
@@ -51,7 +68,7 @@ export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highl
   for (const ac of order) {
     if (ac.distKm > rangeKm) continue;
     const p = view.toScreen(ac.lat, ac.lon);
-    const highlighted = ac.hex === highlight;
+    const highlighted = highlight.has(ac.hex);
     const color = highlighted ? colors.highlight
       : ac.emergency ? colors.alert
       : altitudeColor(ac);
