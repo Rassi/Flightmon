@@ -67,10 +67,14 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     if (u.startsWith('https://tilecache.rainviewer.com/')) rainTiles.push({ url: u, status: r.status(), type: r.headers()['content-type'] });
   });
 
-  console.log('1. First visit, no location');
+  console.log('1. First visit, no location: Copenhagen by default, not saved');
   await page.goto(BASE + '/');
-  check((await page.textContent('#status')).includes('Enter a location'), 'asks for a location');
-  check(apiCalls === 0, 'no API call without a location');
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
+  check(apiCalls > 0, 'aircraft loaded for the default location');
+  check(await page.inputValue('#lat') === '55.6761' && await page.inputValue('#lon') === '12.5683', 'form shows the default (Copenhagen)');
+  check(!page.url().includes('lat='), 'default not put in the URL: ' + page.url());
+  check(await page.evaluate(() => localStorage.getItem('flightmon.location')) === null, 'default not saved');
+  await page.screenshot({ path: OUT + '/00-first-visit.png' });
 
   console.log('2. Paste "55.6761, 12.5683" into latitude, submit');
   await page.fill('#lat', '55.6761, 12.5683');

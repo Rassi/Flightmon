@@ -38,6 +38,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Retired the "don't build anything that can't be verified" rule: it was for the first iterations, before we knew where things would run. Still test and check what can be checked; the "don't work around refusals" rule stays. |
 | 2026-10-31 | Ways to run it without starting a server (explored, nothing chosen; "leave it for now"): (1) deploy to Cloudflare and use the browser's "Install as app" (own window, also on a phone; needs a manifest + icon); (2) a Chrome/Edge extension, whose pages may fetch the feeds directly when listed in its host permissions (all local, no Cloudflare; loaded unpacked; untested); (3) Electron/Tauri desktop app (overkill: size, signing, per-OS builds); (4) a one-click launcher for `wrangler dev` (still a server). Opening `index.html` from disk can't work: the feeds send no CORS headers. |
 | 2026-10-31 | Clock and weather in the header, rain radar on the map with an on/off button (user asked for all three). Clock: the time at the radar's location (zone from Open-Meteo; the browser's until it answers), with seconds, plus UTC when different. Weather: Open-Meteo "current" (sky, temperature, feels-like, wind from/gusts, visibility, pressure), refreshed every 15 min. Rain: RainViewer's latest radar image at 70% (`--rain-opacity`), on by default, the choice remembered in the browser; image list refreshed every 5 min; the image time is shown under the button. Credits with links under the radar (RainViewer only while rain is shown). No rain animation or forecast (not asked for). |
+| 2026-11-08 | First visit with no location shows Copenhagen at 50 km (user chose this over asking for the browser's location or a clearer message). The default isn't saved or put in the URL until the user picks a place. |
 
 ## Data sources: what we found
 
@@ -105,6 +106,12 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 - Rain radar: checked with Playwright replacing RainViewer's tiles by one opaque magenta tile (the one under the centre) and comparing the radar with rain on and off at a grid of points: inside the tile = 70% magenta over the map, outside unchanged. Independent of whether it's raining.
 - The radar's rain layer is drawn opaque onto an offscreen canvas and then put over the map at 70% in one go; drawing each tile translucent would show seams where tiles overlap by a pixel (as with the map dimming).
 - The aircraft pixel check after a refresh missed once by ~4 px (sampled the dark outline of a narrow fuselage): the known race between the response the check read and the one the page drew. Passed on the re-run; the crop (`miss.png`) showed the icon next to the point.
+- A page that looks fine in the browser check can look broken to a person: the check opened the first visit and only checked the hint text, while the user saw an empty dark page (the small hint at the top right went unnoticed). Look at the screenshot of the first visit too.
+
+**The user's Windows machine**
+- Git Bash and PowerShell; `core.autocrlf=true`, so files are checked out with CRLF line endings: multi-line search-and-replace scripts must match CRLF.
+- Playwright isn't installed globally (2026-11-08), so the browser check can't run there yet; Claude in Chrome works against `http://localhost:8787`. Chrome keeps `flightmon.location` in localStorage between visits: clear it to see a first visit.
+- GitHub says the repo moved to `github.com/Rassi/Flightmon`; pushes to the old URL still work.
 
 **The cloud container**
 - `wrangler dev` works and uses the HTTPS proxy for the Worker's outgoing fetches. Headless Chromium needs the proxy too for anything on the internet (map tiles), with `localhost` bypassed.
@@ -152,7 +159,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 - Radar with range rings, compass, north up; ground traffic grey and unlabelled; emergencies red
 - Street map (Esri)
 - List sorted by distance; hover a row to highlight the plane
-- Location: typed, pasted "lat, lon", or the browser's; remembered and in the URL
+- Location: typed, pasted "lat, lon", or the browser's; remembered and in the URL; Copenhagen until one is chosen
 - Colour by altitude, with legend
 - Aircraft-type icons (own drawings, static)
 - Click a plane for details, with route and airframe from adsbdb
@@ -199,6 +206,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-10-31 | Path flown by the selected aircraft: recorded positions (verified) + OpenSky history via `/api/track` (unverified here). |
 | 2026-10-31 | Clock, weather (Open-Meteo) and a switchable rain radar (RainViewer). Tile drawing shared in `public/tiles.js`. Live weather unverified from the container (429); display verified with a recorded answer. |
 | 2026-11-08 | On the user's Windows machine: OpenSky's track via `wrangler dev` and live Open-Meteo weather both work. OpenSky track kept. |
+| 2026-11-08 | First visit shows Copenhagen instead of an empty page (not saved until the user picks a place). Browser check updated; verified in Chrome, check itself not run (no Playwright on the Windows machine). |
 
 ## Open questions
 

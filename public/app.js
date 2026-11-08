@@ -12,6 +12,8 @@ import {
 const REFRESH_MS = 5000;
 const STALE_MS = 20000;
 const DEFAULT_RANGE_KM = 50;
+// Shown on a first visit, so the page isn't empty; not saved until the user picks a place.
+const DEFAULT_LOCATION = { lat: 55.6761, lon: 12.5683, rangeKm: DEFAULT_RANGE_KM }; // Copenhagen
 const MAX_RANGE_KM = 463;
 const STORAGE_KEY = 'flightmon.location';
 const RAIN_KEY = 'flightmon.rain';
@@ -93,7 +95,7 @@ function fillForm(loc) {
   els.range.value = loc ? loc.rangeKm : DEFAULT_RANGE_KM;
 }
 
-function useLocation(loc) {
+function useLocation(loc, { remember = true } = {}) {
   state.location = loc;
   state.data = null;
   state.error = null;
@@ -101,13 +103,15 @@ function useLocation(loc) {
   state.selected = null;
   trails.clear();
   fillForm(loc);
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
-  } catch {
-    // Not remembered; the address bar still has it.
+  if (remember) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
+    } catch {
+      // Not remembered; the address bar still has it.
+    }
+    const params = new URLSearchParams({ lat: loc.lat, lon: loc.lon, range: loc.rangeKm });
+    history.replaceState(null, '', `?${params}`);
   }
-  const params = new URLSearchParams({ lat: loc.lat, lon: loc.lon, range: loc.rangeKm });
-  history.replaceState(null, '', `?${params}`);
   render();
   poll();
   loadWeather();
@@ -621,7 +625,5 @@ const start = initialLocation();
 if (start) {
   useLocation(start);
 } else {
-  fillForm(null);
-  render();
-  els.lat.focus();
+  useLocation(DEFAULT_LOCATION, { remember: false });
 }
