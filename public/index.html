@@ -36,7 +36,13 @@
     <section class="radar">
       <canvas id="radar" role="img" aria-label="Map of aircraft"></canvas>
       <p id="legend" class="legend" aria-label="Altitude colours"></p>
-      <p id="attribution" class="attribution"></p>
+      <div class="corner">
+        <div class="zoom">
+          <button type="button" id="zoom-in" title="Zoom in (around the middle)" aria-label="Zoom in">+</button>
+          <button type="button" id="zoom-out" title="Zoom out (around the middle)" aria-label="Zoom out">−</button>
+        </div>
+        <p id="attribution" class="attribution"></p>
+      </div>
     </section>
     <section class="list">
       <section id="details" class="details" aria-live="polite" hidden></section>

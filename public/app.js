@@ -31,6 +31,8 @@ const $ = (id) => document.getElementById(id);
 const els = {
   home: $('home'),
   setHome: $('set-home'),
+  zoomIn: $('zoom-in'),
+  zoomOut: $('zoom-out'),
   canvas: $('radar'),
   attribution: $('attribution'),
   clockTime: $('clock-time'),
@@ -143,9 +145,26 @@ els.setHome.addEventListener('click', () => {
   render();
 });
 
-// "Set home" does nothing when the map already shows home at its zoom.
+// + and −: twice as close or twice as far, around the map's middle (the wheel
+// zooms around the pointer instead).
+function zoomBy(factor) {
+  const maxKm = maxRangeKm(els.canvas.clientWidth, els.canvas.clientHeight, MAX_RANGE_KM);
+  const rangeKm = Math.min(maxKm, Math.max(1, roundRange(state.view.rangeKm * factor)));
+  if (rangeKm === state.view.rangeKm) return;
+  state.view = { ...state.view, rangeKm };
+  zoomTarget = null;
+  render();
+  settle();
+}
+els.zoomIn.addEventListener('click', () => zoomBy(0.5));
+els.zoomOut.addEventListener('click', () => zoomBy(2));
+
+// "Set home" does nothing when the map already shows home at its zoom; + and −
+// do nothing at the closest and furthest zoom.
 function renderHomeButtons() {
   els.setHome.disabled = state.view.rangeKm === state.home.rangeKm && centredOn(currentView(), state.home);
+  els.zoomIn.disabled = state.view.rangeKm <= 1;
+  els.zoomOut.disabled = state.view.rangeKm >= maxRangeKm(els.canvas.clientWidth, els.canvas.clientHeight, MAX_RANGE_KM);
 }
 
 // The range changes smoothly while scrolling (the exact value is kept here, the

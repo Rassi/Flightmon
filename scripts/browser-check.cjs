@@ -138,9 +138,12 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   async function verifyAgainstApi(label, view = AT_HOME) {
     // Wait for the feed's answer for this map (an answer to a request made
     // before the map moved can still arrive after it), then for the page to draw it.
+    const dims = await page.evaluate(() => { const c = document.getElementById('radar'); return { w: c.clientWidth, h: c.clientHeight }; });
+    const radiusFor = Math.min(463, Math.ceil(view.range * Math.hypot(dims.w, dims.h) / Math.min(dims.w, dims.h)));
     const forView = () => {
       const c = lastApi?.center;
-      return c && lastApi === apiHistory.at(-1) && Math.abs(c.lat - view.center.lat) < 2e-4 && Math.abs(c.lon - view.center.lon) < 2e-4;
+      return c && lastApi === apiHistory.at(-1) && c.radiusKm === radiusFor &&
+        Math.abs(c.lat - view.center.lat) < 2e-4 && Math.abs(c.lon - view.center.lon) < 2e-4;
     };
     for (let t = 0; t < 48 && !forView(); t++) await page.waitForTimeout(250);
     await page.waitForTimeout(300);
@@ -339,6 +342,32 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       check(empty.inner.n === 0, `zoomed out to ${sv?.rangeKm ?? '?'} km with new tiles still loading: the old view stays drawn (${empty.inner.n}/${empty.inner.all} empty samples in the middle; ${empty.whole.n}/${empty.whole.all} over the whole map)`);
       await page.waitForTimeout(2600);
       await page.unroute('**/server.arcgisonline.com/**');
+      const n = apiCalls;
+      await page.click('#home');
+      for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
+    }
+
+    // + and −: double or halve the range around the map's middle (it stays put).
+    {
+      const rect = await page.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
+      const cap = Math.floor(463 * Math.min(rect.w, rect.h) / Math.hypot(rect.w, rect.h));
+      const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.view')));
+      const pos = await page.evaluate(() => { const z = document.getElementById('zoom-out').getBoundingClientRect(); const a = document.getElementById('attribution').getBoundingClientRect(); const m = document.getElementById('radar').getBoundingClientRect(); return { z: [z.left - m.left, z.bottom], a: [a.left - m.left, a.top], mapLeft: m.left }; });
+      check(pos.z[0] < 20 && pos.z[1] <= pos.a[1] && pos.a[1] - pos.z[1] < 16, `+ and − bottom left, just above the credits (− at x ${pos.z[0].toFixed(0)}, ${(pos.a[1] - pos.z[1]).toFixed(0)} px above them)`);
+      await page.click('#zoom-out');
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem('flightmon.view'))?.rangeKm === 100, null, { timeout: 5000 }).catch(() => {});
+      const out = await saved();
+      check(out?.rangeKm === 100 && Math.abs(out.lat - HOME.lat) < 1e-9 && Math.abs(out.lon - HOME.lon) < 1e-9, `− : 50 → ${out?.rangeKm} km, middle unchanged (${out?.lat}, ${out?.lon})`);
+      await verifyAgainstApi('after −', { center: HOME, range: 100 });
+      for (let i = 0; i < 6 && !(await page.$eval('#zoom-out', (b) => b.disabled)); i++) await page.click('#zoom-out');
+      await page.waitForFunction((cap) => JSON.parse(localStorage.getItem('flightmon.view'))?.rangeKm === cap, cap, { timeout: 5000 }).catch(() => {});
+      check((await saved())?.rangeKm === cap && await page.$eval('#zoom-out', (b) => b.disabled), `− stops at ${cap} km and is greyed out there`);
+      await page.click('#zoom-in');
+      await page.waitForFunction((r) => JSON.parse(localStorage.getItem('flightmon.view'))?.rangeKm === r, Math.round(cap / 2), { timeout: 5000 }).catch(() => {});
+      const back = await saved();
+      check(back?.rangeKm === Math.round(cap / 2) && Math.abs(back.lat - HOME.lat) < 1e-9 && !(await page.$eval('#zoom-out', (b) => b.disabled)), `+ : ${cap} → ${back?.rangeKm} km, middle unchanged`);
+      await verifyAgainstApi('after +', { center: HOME, range: back.rangeKm });
+      await page.screenshot({ path: OUT + '/zoom-buttons.png' });
       const n = apiCalls;
       await page.click('#home');
       for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
