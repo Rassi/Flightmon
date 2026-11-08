@@ -131,3 +131,15 @@ test('dimming: tiles drawn opaque, then one overlay over the whole view', () => 
   assert.equal(ctx.fills.length, 1);
   assert.deepEqual(ctx.fills[0], { x: 0, y: 0, w: 900, h: 900, alpha: 0.55, color: '#0b1416' });
 });
+
+test('toLatLon undoes toScreen; the scale follows scaleLat, not the centre', () => {
+  const home = { lat: 55.6761, lon: 12.5683 };
+  const view = makeView({ lat: 56.2, lon: 13.1 }, 50, 400, 1000, 800, home.lat);
+  for (const [lat, lon] of [[55.6761, 12.5683], [56.9, 11.2], [55.1, 14.0]]) {
+    const p = view.toScreen(lat, lon);
+    const back = view.toLatLon(p.x, p.y);
+    assert.ok(Math.abs(back.lat - lat) < 1e-9 && Math.abs(back.lon - lon) < 1e-9, `${lat},${lon} → ${back.lat},${back.lon}`);
+  }
+  const atHome = makeView(home, 50, 400, 1000, 800);
+  assert.equal(view.worldSize, atHome.worldSize);
+});

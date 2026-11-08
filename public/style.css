@@ -100,7 +100,7 @@ main {
 main > * { min-width: 0; }
 
 .radar { position: relative; min-height: 0; }
-.radar canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.radar canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 /* Controls, legend and credits sit in the map's corners. */
 .radar-tools, .legend, .attribution {
   padding: 6px 8px;

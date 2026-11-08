@@ -1,6 +1,7 @@
 // Web Mercator, the projection map tiles use. The map draws everything in
 // it (tiles, aircraft) so they line up exactly, centred on a location
-// and scaled so that `rangeKm` at the centre spans `radiusPx`.
+// and scaled so that `rangeKm` spans `radiusPx` at latitude `scaleLat` (the
+// centre's unless given: the map keeps its scale while it is dragged).
 
 const MERCATOR_RADIUS_KM = 6378.137; // the sphere Web Mercator is defined on
 const EARTH_RADIUS_KM = 6371.0088; // mean radius, for distances (as geo.js)
@@ -16,9 +17,9 @@ export function worldPixel(lat, lon, worldSize) {
   };
 }
 
-export function makeView({ lat, lon }, rangeKm, radiusPx, width, height) {
+export function makeView({ lat, lon }, rangeKm, radiusPx, width, height, scaleLat = lat) {
   const pxPerKm = radiusPx / rangeKm;
-  const worldSize = pxPerKm * 2 * Math.PI * MERCATOR_RADIUS_KM * Math.cos(toRad(lat));
+  const worldSize = pxPerKm * 2 * Math.PI * MERCATOR_RADIUS_KM * Math.cos(toRad(scaleLat));
   const c = worldPixel(lat, lon, worldSize);
   const originX = c.x - width / 2;
   const originY = c.y - height / 2;
@@ -40,6 +41,14 @@ export function makeView({ lat, lon }, rangeKm, radiusPx, width, height) {
       if (dx > worldSize / 2) dx -= worldSize;
       if (dx < -worldSize / 2) dx += worldSize;
       return { x: width / 2 + dx, y: p.y - originY };
+    },
+    // The inverse: the position under screen point (x, y).
+    toLatLon(x, y) {
+      const wx = c.x + (x - width / 2);
+      const wy = originY + y;
+      const lon2 = ((((wx / worldSize) * 360 - 180) + 540) % 360) - 180;
+      const lat2 = toDeg(Math.atan(Math.sinh(Math.PI * (1 - (2 * wy) / worldSize))));
+      return { lat: lat2, lon: lon2 };
     },
   };
 }

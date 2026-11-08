@@ -5,6 +5,7 @@ import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { cornerRangeKm, drawMap, hitTest, mapView, onMap } from './radar.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
+import { bearingDeg, distanceKm } from './geo.js';
 import {
   climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
 } from './format.js';
@@ -38,6 +39,7 @@ const els = {
   refresh: $('refresh'),
   refreshNow: $('refresh-now'),
   rainToggle: $('rain-toggle'),
+  recenter: $('recenter'),
   rainStatus: $('rain-status'),
   legend: $('legend'),
   details: $('details'),
@@ -51,6 +53,7 @@ const state = {
   data: null, // last good /api/aircraft response
   lastOk: 0,
   locationSaved: false, // false while showing the default location
+  viewCenter: null, // the map's middle once dragged or zoomed off the location; null = the location
   refreshS: DEFAULT_REFRESH_S, // seconds between aircraft requests
   error: null,
   highlight: null, // hex of the aircraft under the pointer in the list
@@ -114,6 +117,7 @@ function rememberLocation(loc) {
 function useLocation(loc, { remember = true } = {}) {
   state.location = loc;
   state.locationSaved = remember;
+  state.viewCenter = null;
   zoomTarget = null;
   state.data = null;
   state.error = null;
@@ -127,12 +131,27 @@ function useLocation(loc, { remember = true } = {}) {
   loadWeather();
 }
 
-// --- zoom with the mouse wheel ------------------------------------------------
+// --- moving the map: wheel to zoom, drag to pan ---------------------------------
+
+// The map's middle: the location, unless the map was moved.
+const viewCenter = () => state.viewCenter ?? state.location;
+function currentView(rangeKm = state.location.rangeKm) {
+  return mapView(viewCenter(), rangeKm, els.canvas.clientWidth, els.canvas.clientHeight, state.location.lat);
+}
+
+// Once the map stops moving: save the range and fetch aircraft for what is shown.
+let settleTimer = null;
+function settle() {
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    if (state.locationSaved) rememberLocation(state.location);
+    poll();
+  }, 400);
+}
 
 // The range changes smoothly while scrolling (the exact value is kept here, the
-// shown one is rounded); once scrolling stops, it is saved and aircraft fetched.
+// shown one is rounded). The point under the mouse stays where it is.
 let zoomTarget = null;
-let zoomTimer = null;
 const roundRange = (km) => (km < 10 ? Math.round(km * 10) / 10 : Math.round(km));
 
 // On the whole map section, so scrolling over the rain button or legend zooms too.
@@ -145,15 +164,62 @@ els.canvas.parentElement.addEventListener('wheel', (event) => {
   zoomTarget = Math.min(MAX_RANGE_KM, Math.max(1, zoomTarget * Math.exp(px * 0.0015)));
   const rangeKm = roundRange(zoomTarget);
   if (rangeKm === state.location.rangeKm) return;
+  const box = els.canvas.getBoundingClientRect();
+  const x = event.clientX - box.left;
+  const y = event.clientY - box.top;
+  const under = currentView().toLatLon(x, y);
+  const after = currentView(rangeKm);
+  const p = after.toScreen(under.lat, under.lon);
+  state.viewCenter = after.toLatLon(after.width / 2 + (p.x - x), after.height / 2 + (p.y - y));
   state.location = { ...state.location, rangeKm };
   els.range.value = rangeKm;
   render();
-  clearTimeout(zoomTimer);
-  zoomTimer = setTimeout(() => {
-    if (state.locationSaved) rememberLocation(state.location);
-    poll();
-  }, 400);
+  settle();
 }, { passive: false });
+
+// Drag with the mouse button down. A press that moves less than 4 px is a click.
+let drag = null; // { x, y, view, moved }
+let dragged = false; // the click that ends a drag selects nothing
+els.canvas.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || !state.location) return;
+  drag = { x: event.clientX, y: event.clientY, view: currentView(), moved: false };
+  els.canvas.setPointerCapture(event.pointerId);
+});
+els.canvas.addEventListener('pointermove', (event) => {
+  if (!drag) return;
+  const dx = event.clientX - drag.x;
+  const dy = event.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  drag.moved = true;
+  els.canvas.style.cursor = 'grabbing';
+  const v = drag.view;
+  state.viewCenter = v.toLatLon(v.width / 2 - dx, v.height / 2 - dy);
+  render();
+});
+function endDrag() {
+  if (!drag) return;
+  const { moved } = drag;
+  drag = null;
+  els.canvas.style.cursor = '';
+  if (!moved) return;
+  dragged = true;
+  setTimeout(() => { dragged = false; }); // in case no click follows
+  settle();
+}
+els.canvas.addEventListener('pointerup', endDrag);
+els.canvas.addEventListener('pointercancel', endDrag);
+
+// Back to the location (shown once the map has moved off it).
+els.recenter.addEventListener('click', () => {
+  state.viewCenter = null;
+  render();
+  poll();
+});
+function renderRecenter() {
+  const v = state.location && currentView();
+  const home = v && v.toScreen(state.location.lat, state.location.lon);
+  els.recenter.hidden = !home || Math.hypot(home.x - v.width / 2, home.y - v.height / 2) < 10;
+}
 
 // Accept "55.6761, 12.5683" (as copied from a map) in the latitude field.
 els.lat.addEventListener('input', () => {
@@ -200,7 +266,10 @@ async function poll() {
   if (!state.location || document.hidden) return;
 
   const ctrl = (controller = new AbortController());
-  const { lat, lon, rangeKm } = state.location;
+  const { rangeKm } = state.location;
+  const center = viewCenter();
+  const lat = center.lat.toFixed(4);
+  const lon = center.lon.toFixed(4);
   // Out to the map's corners, within what the feeds allow.
   const radius = Math.min(MAX_RANGE_KM, Math.ceil(cornerRangeKm(rangeKm, els.canvas.clientWidth, els.canvas.clientHeight)));
   try {
@@ -210,7 +279,8 @@ async function poll() {
       const detail = body.failures ? ` (${body.failures.join('; ')})` : '';
       throw new Error((body.error || `HTTP ${res.status}`) + detail);
     }
-    state.data = body;
+    // Distances and directions are from the location, also when the map shows somewhere else.
+    state.data = state.viewCenter ? fromHome(body, state.location) : body;
     trails.record(body);
     state.lastOk = Date.now();
     state.error = null;
@@ -413,8 +483,20 @@ function queueDraw() {
 // The aircraft on the visible map (the list shows exactly these).
 function aircraftOnMap() {
   if (!state.data || !state.location) return [];
-  const view = mapView(state.location, state.location.rangeKm, els.canvas.clientWidth, els.canvas.clientHeight);
+  const view = currentView();
   return state.data.aircraft.filter((ac) => onMap(view, ac));
+}
+
+// The feed's answer with distance and direction measured from `home`, nearest
+// first (rounded as the Worker rounds them).
+function fromHome(body, home) {
+  const aircraft = body.aircraft.map((ac) => ({
+    ...ac,
+    distKm: Number(distanceKm(home.lat, home.lon, ac.lat, ac.lon).toFixed(2)),
+    bearingDeg: Number(bearingDeg(home.lat, home.lon, ac.lat, ac.lon).toFixed(1)),
+  }));
+  aircraft.sort((a, b) => a.distKm - b.distKm);
+  return { ...body, aircraft };
 }
 
 function drawCanvas() {
@@ -436,7 +518,8 @@ function drawCanvas() {
   lastView = drawMap(ctx, {
     width,
     height,
-    center: state.location,
+    center: viewCenter(),
+    home: state.location,
     aircraft: aircraftOnMap(),
     rangeKm: state.location.rangeKm,
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
@@ -630,6 +713,7 @@ function renderSelected() {
 function render() {
   renderSelected();
   drawCanvas();
+  renderRecenter();
   renderList();
   renderStatus();
 }
@@ -658,11 +742,16 @@ function aircraftAt(event) {
   return hitTest(lastView, aircraftOnMap(), event.offsetX, event.offsetY);
 }
 els.canvas.addEventListener('click', (event) => {
+  if (dragged) {
+    dragged = false;
+    return;
+  }
   const ac = aircraftAt(event);
   if (ac) select(ac);
   else deselect();
 });
 els.canvas.addEventListener('mousemove', (event) => {
+  if (drag?.moved) return;
   els.canvas.style.cursor = aircraftAt(event) ? 'pointer' : '';
 });
 document.addEventListener('keydown', (event) => {

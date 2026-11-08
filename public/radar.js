@@ -1,6 +1,7 @@
 // The map: the street map filling the canvas, centred on the chosen location,
 // north up, and each aircraft at its position, pointing along its track.
-// `rangeKm` is the distance from the centre to the nearest edge. Everything is
+// `rangeKm` is the distance from the centre to the nearest edge, measured at
+// `scaleLat` (the location's latitude, so dragging keeps the scale). Everything is
 // drawn in Web Mercator (see mercator.js) so it lines up with the map tiles.
 
 import { altitudeColor } from './altitude.js';
@@ -8,9 +9,9 @@ import { displayName } from './format.js';
 import { drawIcon, iconKind } from './icons.js';
 import { makeView } from './mercator.js';
 
-export function mapView(center, rangeKm, width, height) {
+export function mapView(center, rangeKm, width, height, scaleLat = center.lat) {
   const toEdge = Math.max(10, Math.min(width, height) / 2);
-  return makeView(center, rangeKm, toEdge, width, height);
+  return makeView(center, rangeKm, toEdge, width, height, scaleLat);
 }
 
 // How far out to ask for aircraft so the corners of the map are covered too.
@@ -41,18 +42,19 @@ export function hitTest(view, aircraft, x, y, maxPx = 18) {
   return best;
 }
 
+// `center`: the middle of the map; `home`: the chosen location (a dot).
 // `background(ctx, view)` draws the map tiles (and rain).
 // `highlight`: a Set of hex codes to draw white with a ring.
 // `trail`: points [{ lat, lon, altM, onGround }] flown by the selected aircraft.
-export function drawMap(ctx, { width, height, center, aircraft, rangeKm, highlight = new Set(), trail, colors, background }) {
+export function drawMap(ctx, { width, height, center, home = center, aircraft, rangeKm, highlight = new Set(), trail, colors, background }) {
   ctx.clearRect(0, 0, width, height);
-  const view = mapView(center, rangeKm, width, height);
+  const view = mapView(center, rangeKm, width, height, home.lat);
 
   if (background) background(ctx, view);
   if (trail && trail.length > 1) drawTrail(ctx, view, trail, colors.halo);
 
   // The chosen location: a small dot.
-  const c = view.toScreen(center.lat, center.lon);
+  const c = view.toScreen(home.lat, home.lon);
   ctx.beginPath();
   ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
   ctx.fillStyle = colors.accent;
