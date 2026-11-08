@@ -5,6 +5,7 @@
 
 import { formatAltitude, formatSpeed, displayName } from './format.js';
 import { distanceKm } from './geo.js';
+import { photoBlock } from './photo.js';
 
 const API = 'https://api.adsbdb.com/v0';
 const TIMEOUT_MS = 8000;
@@ -137,7 +138,8 @@ export function pathText(track, trail) {
 // `info`: undefined while loading, else lookup()'s result. `track`: OpenSky's
 // path ({ path } or { error }; undefined while loading). `trail`: the path drawn.
 // `seen`: whether the aircraft was in the latest update.
-export function renderDetails(container, { ac, info, track, trail, seen, onClose }) {
+// `photo`: from photo.js (undefined while loading, null when there is none).
+export function renderDetails(container, { ac, info, track, trail, seen, photo, onClose }) {
   const head = el('div', 'details-head');
   const title = el('div');
   title.append(el('h2', null, displayName(ac)));
@@ -151,6 +153,7 @@ export function renderDetails(container, { ac, info, track, trail, seen, onClose
   head.append(title, close);
 
   const parts = [head];
+  if (photo?.src) parts.push(photoBlock(photo));
   if (!ac.callsign) {
     parts.push(el('p', 'note', 'No callsign, so no route to look up.'));
   } else if (info === undefined) {
@@ -168,6 +171,7 @@ export function renderDetails(container, { ac, info, track, trail, seen, onClose
   if (info?.errors.length) parts.push(el('p', 'note warn', `Couldn't look up details: ${info.errors.join('; ')}`));
   if (!seen) parts.push(el('p', 'note warn', 'Not in the latest update; showing the last position.'));
   if (track?.error) parts.push(el('p', 'note', `Earlier path unavailable (${track.error}); showing it since the page opened.`));
+  if (photo?.error) parts.push(el('p', 'note', `No photo: ${photo.error}`));
 
   const a = info?.aircraft;
   const facts = [

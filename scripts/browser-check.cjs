@@ -93,6 +93,9 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     // unavailable"; a warning, not a failure (the service, not the page).
     const meteo = /api\.open-meteo\.com/.test(m.location().url) && m.text().match(/status of (429|5\d\d)/);
     if (meteo) { warn(`the weather service answered ${meteo[1]}`); return; }
+    // Planespotters' Cloudflare answers headless Chromium 403 (no CORS header), a
+    // real browser gets the photo (checked 2026-11-08); not worked around.
+    if (/api\.planespotters\.net/.test(m.text() + ' ' + m.location().url)) { warn('Planespotters refused the headless test browser (Cloudflare 403); a real browser gets the photo'); return; }
     // /api/aircraft's 502s are judged by their body below (feeds' 429 → warning).
     if (/\/api\/aircraft\?/.test(m.location().url) && /status of 502/.test(m.text())) return;
     errors.push(`${m.text()} (${m.location().url})`);
@@ -565,7 +568,9 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const adsbdb = [];
     // Record responses as they arrive (bodies are read later, so none is missed).
     const tracks = [];
+    const photos = [];
     const onResp = (r) => {
+      if (r.url().startsWith('https://api.planespotters.net/')) photos.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) });
       if (r.url().includes('api.adsbdb.com')) adsbdb.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) });
       if (r.url().includes('/api/track?')) tracks.push({ url: r.url(), status: r.status(), json: r.json().catch(() => null) });
     };
@@ -600,6 +605,23 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
         check(text.includes('adsbdb.com') && text.includes('David J Taylor'), 'adsbdb and route data credited');
       } else {
         check(text.includes(`No route known for ${cs}`), `no route known for ${cs} (adsbdb: ${routeResp?.status} ${JSON.stringify(routeResp?.body?.response)})`);
+      }
+      // The photo: as Planespotters gave it, linked to its page, photographer credited.
+      await page.waitForFunction(() => document.querySelector('#details .photo img')?.complete || document.querySelector('#details')?.dataset.photo === 'none', null, { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      const ps = photos.find((p) => p.url.endsWith('/hex/' + target.a.hex));
+      const psBody = ps && await ps.json;
+      const want = psBody?.photos?.[0];
+      const shown = await page.evaluate(() => { const f = document.querySelector('#details .photo'); if (!f) return null; const a = f.querySelector('a'), i = f.querySelector('img'); return { href: a.href, rel: a.rel, src: i.src, w: i.naturalWidth, caption: f.querySelector('figcaption').textContent }; });
+      if (want) {
+        check(Boolean(shown) && shown.src === want.thumbnail_large.src && shown.href === want.link && !/nofollow/.test(shown.rel) && shown.w > 0 && shown.caption.includes(want.photographer),
+          `photo from Planespotters shown, linked to its page and credited ("${shown?.caption}", ${shown?.w} px wide)`);
+      } else if (ps) {
+        check(!shown, `no photo when Planespotters has none (${ps.status} ${JSON.stringify(psBody).slice(0, 80)})`);
+      } else {
+        // Refused (headless): the card says so instead of staying blank.
+        const note = await page.textContent('#details');
+        check(!shown && note.includes("No photo: couldn't reach Planespotters"), 'Planespotters refused: the card says "No photo: couldn\'t reach Planespotters"');
       }
       const reg = acResp?.body?.response?.aircraft?.registration;
       if (reg) check(text.includes(reg), `aircraft details from adsbdb shown (registration ${reg})`);
@@ -706,6 +728,32 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       check((await page.textContent('#details h2')) === (other.callsign ?? other.reg ?? other.hex.toUpperCase()), `click a list row: details for ${other.callsign ?? other.reg ?? other.hex}`);
       await page.keyboard.press('Escape');
       check(await page.$eval('#details', (e) => e.hidden), 'Esc closes the details');
+
+      // The photo as the card shows it, from Planespotters' recorded answer for
+      // LN-RKU and a stand-in image (the real API refuses this headless browser).
+      {
+        const recorded = { photos: [{ id: '1973791',
+          thumbnail: { src: 'https://t.plnspttrs.net/36579/1973791_2d626231f6_t.jpg', size: { width: 200, height: 112 } },
+          thumbnail_large: { src: 'https://t.plnspttrs.net/36579/1973791_2d626231f6_280.jpg', size: { width: 498, height: 280 } },
+          link: 'https://www.planespotters.net/photo/1973791/ln-rku-sas-scandinavian-airlines-airbus-a330-343?utm_source=api',
+          photographer: 'Lauchlan' }] };
+        const standIn = Buffer.from(await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 498; c.height = 280; const x = c.getContext('2d'); x.fillStyle = '#3a6b63'; x.fillRect(0, 0, 498, 280); return c.toDataURL('image/png').split(',')[1]; }), 'base64');
+        let asked = 0;
+        await page.route('https://api.planespotters.net/**', (r) => { asked++; r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(recorded) }); });
+        await page.route('https://t.plnspttrs.net/**', (r) => r.fulfill({ status: 200, contentType: 'image/png', body: standIn }));
+        await page.click(`#aircraft tbody tr[data-hex="${other.hex}"]`);
+        await page.waitForFunction(() => document.querySelector('#details .photo img')?.naturalWidth > 0, null, { timeout: 8000 }).catch(() => {});
+        const f = await page.evaluate(() => { const fig = document.querySelector('#details .photo'); if (!fig) return null; const a = fig.querySelector('a'), i = fig.querySelector('img'); return { href: a.href, target: a.target, rel: a.rel, src: i.src, w: i.naturalWidth, h: i.naturalHeight, alt: i.alt, caption: fig.querySelector('figcaption').textContent, top: fig.getBoundingClientRect().top, head: document.querySelector('#details .details-head').getBoundingClientRect().bottom }; });
+        const p = recorded.photos[0];
+        check(Boolean(f) && f.src === p.thumbnail_large.src && f.w === 498 && f.h === 280, `photo: the large thumbnail, loaded from the URL Planespotters gave (${f?.src})`);
+        check(Boolean(f) && f.href === p.link && f.target === '_blank' && !/nofollow/.test(f.rel), `photo links to its page on Planespotters, a plain link (rel="${f?.rel}")`);
+        check(Boolean(f) && f.caption === 'Photo: Lauchlan / Planespotters.net' && f.top >= f.head, `photographer credited under it: "${f?.caption}", below the card's title`);
+        await page.screenshot({ path: OUT + '/details-photo.png' });
+        await page.keyboard.press('Escape');
+        await page.unroute('https://api.planespotters.net/**');
+        await page.unroute('https://t.plnspttrs.net/**');
+        check(asked === 1, `one lookup for the aircraft (${asked})`);
+      }
     }
     page.off('response', onResp);
   }

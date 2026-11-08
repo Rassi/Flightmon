@@ -218,6 +218,9 @@ tbody tr.selected td:first-child { box-shadow: inset 3px 0 var(--accent); }
 .airport .code { font-size: 22px; font-weight: 700; letter-spacing: 0.03em; }
 .airport .place { font-size: 12px; }
 .airport .where { font-size: 12px; color: var(--muted); }
+.details .photo { margin: 12px 0 0; }
+.details .photo img { display: block; width: 100%; height: auto; border-radius: 6px; }
+.details .photo figcaption { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .details .note { margin: 10px 0 0; color: var(--muted); }
 .details .note.warn { color: var(--row-highlight); }
 .facts {

@@ -1,6 +1,7 @@
 import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.js';
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
+import { fetchPhoto } from './photo.js';
 import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
@@ -61,6 +62,7 @@ const state = {
   selected: null, // the clicked aircraft, as last seen; its details are shown
   info: undefined, // adsbdb lookup for the selected aircraft (undefined while loading)
   track: undefined, // its path from OpenSky: { path } or { error } (undefined while loading)
+  photo: undefined, // its photo from Planespotters (see photo.js; undefined while loading)
   weather: null, // Open-Meteo's current weather at home (see weather.js)
   weatherError: null,
   weatherAt: 0, // when it was last asked for
@@ -647,10 +649,16 @@ function select(ac) {
   state.selected = ac;
   state.info = undefined;
   state.track = undefined;
+  state.photo = undefined;
   render();
   lookup(ac.hex, ac.callsign).then((info) => {
     if (state.selected?.hex !== ac.hex) return; // another aircraft was chosen meanwhile
     state.info = info;
+    renderSelected();
+  });
+  fetchPhoto(ac.hex).then((photo) => {
+    if (state.selected?.hex !== ac.hex) return;
+    state.photo = photo;
     renderSelected();
   });
   fetchTrack(ac.hex).then((track) => {
@@ -680,6 +688,7 @@ function renderSelected() {
     ac: state.selected,
     info: state.info,
     track: state.track,
+    photo: state.photo,
     trail: selectedTrail(),
     seen: Boolean(current),
     onClose: deselect,
