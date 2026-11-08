@@ -404,6 +404,7 @@ function cssColors() {
     highlight: get('--highlight'),
     halo: get('--bg'),
     mapOpacity: Number(get('--map-opacity')) || 1,
+    mapSaturation: Number(get('--map-saturation') || 1),
     rainOpacity: Number(get('--rain-opacity')) || 0.7,
   };
 }
@@ -460,7 +461,7 @@ function drawCanvas() {
     trail: selectedTrail(),
     colors,
     background: (c, view) => {
-      drawBasemap(c, view, { dpr, opacity: colors.mapOpacity, dimColor: colors.halo, onLoad: queueDraw });
+      drawBasemap(c, view, { dpr, opacity: colors.mapOpacity, saturation: colors.mapSaturation, dimColor: colors.halo, onLoad: queueDraw });
       if (state.rainOn && state.rainFrame) {
         drawRain(c, view, state.rainFrame, { dpr, opacity: colors.rainOpacity, onLoad: queueDraw });
       }

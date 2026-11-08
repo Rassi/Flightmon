@@ -71,7 +71,8 @@ function fakeContext() {
   return {
     drawn,
     save() {}, restore() {},
-    drawImage(img, x, y, w, h) { drawn.push({ src: img.src, x, y, w, h, alpha: this.globalAlpha }); },
+    drawImage(img, x, y, w, h) { drawn.push({ src: img.src, x, y, w, h, alpha: this.globalAlpha, filter: this.filter }); },
+    filter: 'none',
     fills: [],
     fillRect(x, y, w, h) { this.fills.push({ x, y, w, h, alpha: this.globalAlpha, color: this.fillStyle }); },
     globalAlpha: 1,
@@ -130,6 +131,17 @@ test('dimming: tiles drawn opaque, then one overlay over the whole view', () => 
   assert.ok(ctx.drawn.length > 0 && ctx.drawn.every((d) => d.alpha === 1));
   assert.equal(ctx.fills.length, 1);
   assert.deepEqual(ctx.fills[0], { x: 0, y: 0, w: 900, h: 900, alpha: 0.55, color: '#0b1416' });
+});
+
+test('less colour: tiles drawn through a saturate() filter, which is reset after', () => {
+  fakeImages();
+  const ctx = fakeContext();
+  drawBasemap(ctx, makeView(CPH, 50, 400, 900, 900), { saturation: 0.3, onLoad: () => {} });
+  assert.ok(ctx.drawn.length > 0 && ctx.drawn.every((d) => d.filter === 'saturate(0.3)'));
+  assert.equal(ctx.filter, 'none');
+  const plain = fakeContext();
+  drawBasemap(plain, makeView(CPH, 50, 400, 900, 900), { onLoad: () => {} });
+  assert.ok(plain.drawn.every((d) => d.filter === 'none'));
 });
 
 test('toLatLon undoes toScreen; the scale follows scaleLat, not the centre', () => {

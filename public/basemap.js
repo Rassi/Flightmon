@@ -21,12 +21,14 @@ export function tileZoom(view, dpr = 1) {
   return Math.max(0, Math.min(MAX_ZOOM, Math.round(view.zoom + Math.log2(dpr))));
 }
 
-// Draws the tiles covering the view, then dims them towards `dimColor` when
-// `opacity` < 1. (Dimming afterwards, rather than drawing the tiles
+// Draws the tiles covering the view, keeping `saturation` of their colour
+// (1 = as Esri draws them), then dims them towards `dimColor` when `opacity` < 1. (Dimming afterwards, rather than drawing the tiles
 // translucent, keeps their 1-pixel overlaps from showing as bright seams.)
-export function drawBasemap(ctx, view, { dpr = 1, opacity = 1, dimColor = '#000', onLoad }) {
+export function drawBasemap(ctx, view, { dpr = 1, opacity = 1, saturation = 1, dimColor = '#000', onLoad }) {
   ctx.save();
+  if (saturation < 1) ctx.filter = `saturate(${saturation})`;
   drawTiles(ctx, view, tileZoom(view, dpr), tileUrl, cache, onLoad);
+  ctx.filter = 'none';
   if (opacity < 1) {
     ctx.globalAlpha = 1 - opacity;
     ctx.fillStyle = dimColor;

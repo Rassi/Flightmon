@@ -13,6 +13,9 @@
   --accent: #3fb68f;
   /* 1 shows the street map as is; lower dims it towards the background. */
   --map-opacity: 1;
+  /* How much of the street map's colour is kept (1 = all, 0 = grey): its orange
+     roads otherwise compete with the altitude colours. */
+  --map-saturation: 0.3;
   /* How strongly the rain radar covers the map. */
   --rain-opacity: 0.7;
   /* Behind the controls and credits that sit on the map. */

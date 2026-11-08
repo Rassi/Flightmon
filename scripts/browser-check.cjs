@@ -218,6 +218,24 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const swatchBad = swatches.filter(([hex, c]) => { const a = lastApi.aircraft.find((x) => x.hex === hex); return a && !a.emergency && c !== rgb(altitudeColor(a)); });
     check(swatches.length > 0 && swatchBad.length === 0, `list swatches match the radar colours (${swatches.length})`);
 
+    // Map colour: tiles keep 30% of their colour (--map-saturation). Measured on a
+    // page of its own whose tiles are all pure orange, with no aircraft and no rain.
+    {
+      const mc = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+      await mc.addInitScript(() => localStorage.setItem('flightmon.rain', 'off'));
+      const mp = await mc.newPage();
+      const orange = Buffer.from(await page.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'); x.fillStyle = '#ff8000'; x.fillRect(0, 0, 256, 256); return c.toDataURL('image/png').split(',')[1]; }), 'base64');
+      await mp.route('**/server.arcgisonline.com/**', (r) => r.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: orange }));
+      await mp.route('**/api/aircraft*', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ now: Date.now(), source: 'test', center: { ...HOME, radiusKm: 73 }, aircraft: [] }) }));
+      await mp.route('https://api.open-meteo.com/**', (r) => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: require('node:fs').readFileSync(require('node:path').join(__dirname, '../test/fixtures/openmeteo-cph.json')) }));
+      await mp.goto(BASE + '/');
+      await mp.waitForTimeout(1500);
+      const px = await mp.evaluate(() => { const c = document.getElementById('radar'); return Array.from(c.getContext('2d').getImageData(Math.round(c.width / 4), Math.round(c.height / 4), 1, 1).data); });
+      const chroma = Math.max(px[0], px[1], px[2]) - Math.min(px[0], px[1], px[2]);
+      check(px[3] === 255 && chroma >= 50 && chroma <= 105, `map at about 30% colour: pure orange (255,128,0) drawn as rgb(${px.slice(0, 3)}), colourfulness ${chroma} of 255`);
+      await mc.close();
+    }
+
     // Mouse wheel: up zooms in, down zooms out, keeping the point under the pointer in place.
     const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
     const home = HOME;
