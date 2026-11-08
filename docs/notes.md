@@ -66,7 +66,7 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 | `api.adsb.lol/v2/point/{lat}/{lon}/{nm}` | ✅ 200 | ❌ no `Access-Control-Allow-Origin`; preflight 405 | **Primary feed.** readsb format, `ac` array, `now` in ms. Max radius 250 nm. |
 | `opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{nm}` | ✅ 200 | ❌ same | **Fallback feed.** Same format, `aircraft` array, `now` in seconds. FlightScnr uses a `/api/v3/lat/…` endpoint (not tried). |
 | `api.airplanes.live` | ❌ 403 | ❌ | "Please contact us at contact@airplanes.live": needs permission first. |
-| `api.planespotters.net/pub/photos/hex/{hex}` | ❌ 403 | API sends `ACAO: *` | Rejects generic User-Agents (wants app name + contact URL). Headless Chromium got a 403 HTML page. **Untested from a real browser.** |
+| `api.planespotters.net/pub/photos/hex/{hex}` | ❌ 403 from the container; ✅ 200 from the user's machine with `Flightmon (+https://github.com/rassi/flightmon)` (2026-11-08) | ✅ `ACAO: *`; ✅ from the page in the user's Chrome (2026-11-08) | Rejects generic User-Agents (wants app name + contact URL); browser requests need an Origin/Referer (a web page). Free, no key, one photo per hex or registration: `thumbnail` (200×112) and `thumbnail_large` (498×280) on `t.plnspttrs.net` (real JPEG, checked), `link`, `photographer`. **Terms** (photo/api page, read 2026-11-08 with our User-Agent; WebFetch got 403): photographer credited in visible text next to the image; the thumbnail is a plain link (no nofollow) to `link`; images fetched straight from their URLs by the browser showing them, not stored, re-hosted or proxied; URLs unchanged; JSON may be cached ≤ 24 h; reasonable volume; no AI training; no passing the data on. |
 | `api.open-meteo.com/v1/forecast?current=…&timezone=auto` | ✅ once, then 429 from the container; ✅ from the user's machine (2026-11-08) | ✅ `ACAO: *` | **In use** for weather and the location's time zone. 429 `{"reason":"Daily API request limit exceeded. Please try again tomorrow."}` comes from the container's shared IP (seen 2026-10-30 and 10-31); a laptop has its own allowance (10,000 calls/day, non-commercial). Once it didn't answer within 8 s at all. Free, no key; CC BY 4.0, credit with a link. "Current" values are model data in 15-min steps, not observations. `wind_direction_10m` is where the wind comes from. |
 | `api.rainviewer.com/public/weather-maps.json` + `tilecache.rainviewer.com` | ✅ | ✅ `ACAO: *` (list and tiles) | **In use** for the rain overlay. No key; "personal and educational use only", credit RainViewer with a link. The list has the last 2 h, one image per 10 min (`radar.past[]`, `nowcast` empty). Tiles: `{host}{path}/{256\|512}/{z}/{x}/{y}/{colour}/{smooth}_{snow}.png`. Since Jan 2026: **max zoom 7** (zoom 8+ answers 200 with a grey "Zoom Level Not Supported" image), one colour scheme (every colour number gives the same tile), no satellite/forecast. A 512 px tile at zoom 7 covers the same area as the 256 px one, twice as sharp. Only covers places with weather radars. |
 | LibreWXR (`api.librewxr.net`) | ✅ (list) | not checked | A self-hostable RainViewer-compatible API (AGPL code, CC BY 4.0 data; MET Norway radar for the Nordics, DWD, US) restoring higher zooms and colour schemes. Its public instance is "for testing". A fallback if RainViewer's free tier goes. |
@@ -218,7 +218,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 14. Route line on the radar towards the destination (adsbdb gives airport coordinates)
 
 **Need a key, payment, or checking first**
-- Aircraft photos: planespotters (refused generic requests from here; test in a real browser), Wikimedia Commons fallback
+- Aircraft photos: planespotters works from a browser page and with our User-Agent (2026-11-08); fits as a photo in the details card, loaded on click, credited and linked as their terms require. Wikimedia Commons as a fallback.
 - Better routes: FR24 (paid), AirLabs, FlightAware (paid per call). adsbdb (free) is in use but can be stale
 - CARTO / Stadia map styles (free keys)
 - Ships (aisstream.io free key; Open Waters fallback without key), wildfires outside the US (NASA FIRMS free key)
@@ -255,6 +255,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | Street map at 30% colour. Unit test for the filter; browser check `--only=map` measures it on a synthetic tile. |
 | 2026-11-08 | Set home button and a grey crosshair at the map's middle. Unit tests for the scale conversion and "centred on home". Browser check step 10 (Set home); the check now waits for the answer for the expected map position (fixed several races), accepts tied distances in either order, and warns on Open-Meteo 503. `--only=map,home` then `home` and the always-on steps passed. |
 | 2026-11-08 | + / − zoom buttons, lower left above the credits. Browser check (map group): position, ×2 out with the middle unchanged, stop and greyed out at the cap, ×½ in. `--only=map` passed. |
+| 2026-11-08 | planespotters checked from the user's machine and Chrome: works; terms read and noted. |
 
 ## Open questions
 
@@ -263,4 +264,3 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 - Do adsb.lol / adsb.fi accept requests from Cloudflare? (Check at the first deploy.)
 - Esri's terms summary page couldn't be loaded; the exact conditions for keyless use are unconfirmed.
-- planespotters.net from a real browser: allowed or not?
