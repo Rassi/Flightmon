@@ -68,6 +68,8 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 
 **Lesson:** a tile server can answer 200 with a placeholder image. Look at a tile, not just the status.
 
+**Rate limits (2026-11-08, user's Windows machine):** after a full browser check (several pages polling every 5 s) plus a few curls, adsb.lol *and* adsb.fi both answered 429 to the same IP; the Worker then returns 502 "No flight feed answered" with both 429s listed. Neither publishes its limit (not looked up yet). The page copes (keeps the last data, says the update failed), but the browser check fails on the console error. Don't hammer the feeds when checking by hand.
+
 **Still unknown until the first deploy:** whether adsb.lol / adsb.fi accept requests from Cloudflare's network.
 
 ## Data quirks (readsb format)
@@ -110,7 +112,7 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 
 **The user's Windows machine**
 - Git Bash and PowerShell; `core.autocrlf=true`, so files are checked out with CRLF line endings: multi-line search-and-replace scripts must match CRLF.
-- Playwright isn't installed globally (2026-11-08), so the browser check can't run there yet; Claude in Chrome works against `http://localhost:8787`. Chrome keeps `flightmon.location` in localStorage between visits: clear it to see a first visit.
+- Playwright 1.65 installed globally with its Chromium (2026-11-08), so the browser check runs there. Claude in Chrome also works against `http://localhost:8787`. Chrome keeps `flightmon.location` in localStorage between visits: clear it to see a first visit.
 - GitHub says the repo moved to `github.com/Rassi/Flightmon`; pushes to the old URL still work.
 
 **The cloud container**
@@ -206,7 +208,8 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-10-31 | Path flown by the selected aircraft: recorded positions (verified) + OpenSky history via `/api/track` (unverified here). |
 | 2026-10-31 | Clock, weather (Open-Meteo) and a switchable rain radar (RainViewer). Tile drawing shared in `public/tiles.js`. Live weather unverified from the container (429); display verified with a recorded answer. |
 | 2026-11-08 | On the user's Windows machine: OpenSky's track via `wrangler dev` and live Open-Meteo weather both work. OpenSky track kept. |
-| 2026-11-08 | First visit shows Copenhagen instead of an empty page (not saved until the user picks a place). Browser check updated; verified in Chrome, check itself not run (no Playwright on the Windows machine). |
+| 2026-11-08 | First visit shows Copenhagen instead of an empty page (not saved until the user picks a place). Browser check updated; verified in Chrome. |
+| 2026-11-08 | Playwright installed on the Windows machine. First full browser check there: all passed except "no console errors", from a real 502 when both feeds answered 429. |
 
 ## Open questions
 
