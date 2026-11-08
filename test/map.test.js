@@ -143,3 +143,28 @@ test('toLatLon undoes toScreen; the scale follows scaleLat, not the centre', () 
   const atHome = makeView(home, 50, 400, 1000, 800);
   assert.equal(view.worldSize, atHome.worldSize);
 });
+
+test('a tile still loading is stood in for by loaded coarser and sharper tiles', async () => {
+  const { drawTiles } = await import('../public/tiles.js');
+  const url = (z, x, y) => `${z}/${x}/${y}`;
+  const img = (src) => ({ src, complete: true, naturalWidth: 256 });
+  // Loaded: the parent of tile 4/8/5 (3/4/2) and one of its children (5/16/10). 4/8/5 itself isn't.
+  const have = new Map([['3/4/2', img('3/4/2')], ['5/16/10', img('5/16/10')]]);
+  const cache = {
+    get: (u) => have.get(u) ?? { src: u, complete: false, naturalWidth: 0 },
+    loaded: (u) => have.get(u) ?? null,
+  };
+  const drawn = [];
+  const ctx = { drawImage: (...a) => drawn.push({ src: a[0].src, args: a.slice(1) }) };
+  // A view exactly one zoom-4 tile (256 px) big, showing tile 4/8/5.
+  const view = { worldSize: 256 * 16, originX: 8 * 256, originY: 5 * 256, width: 255, height: 255 };
+  drawTiles(ctx, view, 4, url, cache, () => {});
+
+  // First the parent: its bottom-left quarter (4/8/5 is x even, y odd), scaled to the whole tile.
+  assert.equal(drawn[0].src, '3/4/2');
+  assert.deepEqual(drawn[0].args, [0, 128, 128, 128, 0, 0, 256, 256]);
+  // Then the sharper one on top, in its quarter.
+  assert.equal(drawn[1].src, '5/16/10');
+  assert.deepEqual(drawn[1].args, [0, 0, 128, 128]);
+  assert.equal(drawn.length, 2);
+});

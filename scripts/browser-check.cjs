@@ -285,6 +285,30 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       check(savedIs(AT_HOME, await saved()), 'Home: Copenhagen at 50 km, saved');
       await verifyAgainstApi('after Home');
     }
+
+    // Zooming out one tile level while the new tiles are held back: what was on
+    // screen stays drawn from the tiles already loaded (no background showing).
+    {
+      const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
+      await page.route('**/server.arcgisonline.com/**', (route) => setTimeout(() => route.continue().catch(() => {}), 2500));
+      await page.mouse.move(rect.x + rect.w / 2, rect.y + rect.h / 2);
+      await page.mouse.wheel(0, 2 * Math.log(2) / 0.0015); // × 2 out (Chromium halves the delta at DPR 2)
+      await page.waitForTimeout(300);
+      const empty = await page.evaluate(() => {
+        const c = document.getElementById('radar'); const ctx = c.getContext('2d');
+        const count = (x0, y0, x1, y1) => { let n = 0, all = 0; for (let y = y0; y < y1; y += 6) for (let x = x0; x < x1; x += 6) { all++; if (ctx.getImageData(x, y, 1, 1).data[3] === 0) n++; } return { n, all }; };
+        const w = c.width, h = c.height;
+        return { inner: count(Math.round(w * 0.28), Math.round(h * 0.28), Math.round(w * 0.72), Math.round(h * 0.72)), whole: count(0, 0, w, h) };
+      });
+      const sv = await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.view')));
+      await page.screenshot({ path: OUT + '/zoom-out-loading.png' });
+      check(empty.inner.n === 0, `zoomed out to ${sv?.rangeKm ?? '?'} km with new tiles still loading: the old view stays drawn (${empty.inner.n}/${empty.inner.all} empty samples in the middle; ${empty.whole.n}/${empty.whole.all} over the whole map)`);
+      await page.waitForTimeout(2600);
+      await page.unroute('**/server.arcgisonline.com/**');
+      const n = apiCalls;
+      await page.click('#home');
+      for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
+    }
     await page.mouse.move(5, 5);
   }
 
