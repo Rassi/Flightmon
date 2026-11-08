@@ -218,6 +218,8 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 12. Earthquakes (USGS, no key)
 13. Other map styles: Esri satellite (no key), Natural Earth outlines (no key)
 14. Route line on the radar towards the destination (adsbdb gives airport coordinates)
+15. **Auto-open nearby aircraft** (user, 2026-11-08): open the details card by itself for an aircraft closer than ~2 km to home and lower than ~3 km (both to be tuned). Questions for later: horizontal distance or 3D; don't replace a card the user opened; which one when several qualify (nearest?); open once per pass, not again on every update while it stays close; close again when it leaves? Data is all there (position, altitude, distance from home).
+16. **Rain warning for home** (user, 2026-11-08): say when rain is expected at home within the next ~2 hours. RainViewer has no forecast any more (`nowcast` empty since Jan 2026), so use Open-Meteo (already used for the weather, no key): `minutely_15=precipitation` (15-min steps; nowcast-quality only in some regions) or `hourly=precipitation,precipitation_probability`. Show e.g. "Rain from ~14:30" in the weather line; decide the threshold (mm / probability). Check what Open-Meteo gives for Copenhagen before building.
 
 **Need a key, payment, or checking first**
 - Aircraft photos from another source when Planespotters has none (e.g. Wikimedia Commons)
