@@ -50,6 +50,7 @@ const state = {
   location: null, // { lat, lon, rangeKm }
   data: null, // last good /api/aircraft response
   lastOk: 0,
+  locationSaved: false, // false while showing the default location
   refreshS: DEFAULT_REFRESH_S, // seconds between aircraft requests
   error: null,
   highlight: null, // hex of the aircraft under the pointer in the list
@@ -99,27 +100,60 @@ function fillForm(loc) {
   els.range.value = loc ? loc.rangeKm : DEFAULT_RANGE_KM;
 }
 
+// Saved in the browser and the address bar (not for the default location).
+function rememberLocation(loc) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
+  } catch {
+    // Not remembered; the address bar still has it.
+  }
+  const params = new URLSearchParams({ lat: loc.lat, lon: loc.lon, range: loc.rangeKm });
+  history.replaceState(null, '', `?${params}`);
+}
+
 function useLocation(loc, { remember = true } = {}) {
   state.location = loc;
+  state.locationSaved = remember;
+  zoomTarget = null;
   state.data = null;
   state.error = null;
   state.highlight = null;
   state.selected = null;
   trails.clear();
   fillForm(loc);
-  if (remember) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
-    } catch {
-      // Not remembered; the address bar still has it.
-    }
-    const params = new URLSearchParams({ lat: loc.lat, lon: loc.lon, range: loc.rangeKm });
-    history.replaceState(null, '', `?${params}`);
-  }
+  if (remember) rememberLocation(loc);
   render();
   poll();
   loadWeather();
 }
+
+// --- zoom with the mouse wheel ------------------------------------------------
+
+// The range changes smoothly while scrolling (the exact value is kept here, the
+// shown one is rounded); once scrolling stops, it is saved and aircraft fetched.
+let zoomTarget = null;
+let zoomTimer = null;
+const roundRange = (km) => (km < 10 ? Math.round(km * 10) / 10 : Math.round(km));
+
+// On the whole map section, so scrolling over the rain button or legend zooms too.
+els.canvas.parentElement.addEventListener('wheel', (event) => {
+  if (!state.location) return;
+  event.preventDefault();
+  // Pixels, lines or pages, depending on the device.
+  const px = event.deltaY * (event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 800 : 1);
+  zoomTarget ??= state.location.rangeKm;
+  zoomTarget = Math.min(MAX_RANGE_KM, Math.max(1, zoomTarget * Math.exp(px * 0.0015)));
+  const rangeKm = roundRange(zoomTarget);
+  if (rangeKm === state.location.rangeKm) return;
+  state.location = { ...state.location, rangeKm };
+  els.range.value = rangeKm;
+  render();
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => {
+    if (state.locationSaved) rememberLocation(state.location);
+    poll();
+  }, 400);
+}, { passive: false });
 
 // Accept "55.6761, 12.5683" (as copied from a map) in the latitude field.
 els.lat.addEventListener('input', () => {

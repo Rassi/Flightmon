@@ -189,6 +189,30 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const rgb = (h) => `rgb(${hexToRgb(h).join(', ')})`;
     const swatchBad = swatches.filter(([hex, c]) => { const a = lastApi.aircraft.find((x) => x.hex === hex); return a && !a.emergency && c !== rgb(altitudeColor(a)); });
     check(swatches.length > 0 && swatchBad.length === 0, `list swatches match the radar colours (${swatches.length})`);
+
+    // Mouse wheel: up zooms in, down zooms out, around the location.
+    const box = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x + r.width / 3, y: r.y + r.height / 3 }; });
+    await page.mouse.move(box.x, box.y);
+    // The page gets the delta in CSS pixels (Chromium divides Playwright's by the device pixel ratio).
+    await page.evaluate(() => addEventListener('wheel', (e) => { window.lastWheelDy = e.deltaY; }, { capture: true }));
+    let target = 50;
+    const zoomTo = async (dy) => {
+      const n = apiCalls;
+      await page.mouse.wheel(0, dy);
+      await page.waitForTimeout(50);
+      const got = await page.evaluate(() => window.lastWheelDy);
+      target *= Math.exp(got * 0.0015); // the page's rate
+      const km = target < 10 ? Math.round(target * 10) / 10 : Math.round(target);
+      check(await page.inputValue('#range') === String(km), `wheel ${dy > 0 ? 'down' : 'up'} (deltaY ${got}): range ${await page.inputValue('#range')} km (expected ${km})`);
+      await page.waitForFunction((km) => location.search.includes(`range=${km}&`) || location.search.endsWith(`range=${km}`), km, { timeout: 5000 }).catch(() => {});
+      check(new URL(page.url()).searchParams.get('range') === String(km), `range saved in the URL once scrolling stops: ${page.url()}`);
+      for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
+      await verifyAgainstApi(`zoomed to ${km} km`);
+    };
+    await zoomTo(-300); // in
+    await zoomTo(300); // and back to 50
+    check(await page.inputValue('#range') === '50', 'back at 50 km');
+    await page.mouse.move(5, 5);
   }
 
   if (!want('weather')) skipped('3c', 'weather'); else {

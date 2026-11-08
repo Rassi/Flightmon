@@ -39,6 +39,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Ways to run it without starting a server (explored, nothing chosen; "leave it for now"): (1) deploy to Cloudflare and use the browser's "Install as app" (own window, also on a phone; needs a manifest + icon); (2) a Chrome/Edge extension, whose pages may fetch the feeds directly when listed in its host permissions (all local, no Cloudflare; loaded unpacked; untested); (3) Electron/Tauri desktop app (overkill: size, signing, per-OS builds); (4) a one-click launcher for `wrangler dev` (still a server). Opening `index.html` from disk can't work: the feeds send no CORS headers. |
 | 2026-10-31 | Clock and weather in the header, rain radar on the map with an on/off button (user asked for all three). Clock: the time at the radar's location (zone from Open-Meteo; the browser's until it answers), with seconds, plus UTC when different. Weather: Open-Meteo "current" (sky, temperature, feels-like, wind from/gusts, visibility, pressure), refreshed every 15 min. Rain: RainViewer's latest radar image at 70% (`--rain-opacity`), on by default, the choice remembered in the browser; image list refreshed every 5 min; the image time is shown under the button. Credits with links under the radar (RainViewer only while rain is shown). No rain animation or forecast (not asked for). |
 | 2026-11-08 | No circular radar: the user didn't like the circle and the range lines. The street map fills the whole left section; no rings, cross, distance labels or compass letters, just a small dot at the location. "Range" is now the distance from the centre to the nearest edge; aircraft are asked for out to the corners (range × diagonal / shorter side, max 463 km), and the list shows exactly the aircraft on the map (status: "N aircraft on the map (50 km to the nearest edge)"). Rain button, legend and credits sit on the map in translucent panels. |
+| 2026-11-08 | Mouse wheel / trackpad zooms (user asked), around the location, which stays in the centre (no panning). Range × e^(deltaY × 0.0015): about ×1.16 per mouse notch (deltaY 100); 1 to 463 km, shown to 0.1 km below 10 km. Once scrolling stops (400 ms) the range goes into the URL/storage (not for the default location) and aircraft are fetched; paths and the open details stay. The Range field takes decimals (step 0.1). |
 | 2026-11-08 | Laptop browser only for now: don't spend effort on phone widths. The phone step was dropped from the browser check; the existing narrow-screen CSS stays but isn't checked. |
 | 2026-11-08 | Refresh interval is a "Refresh" menu in the header (5 s, 10 s, 30 s, 1 min, 2 min), default **30 s** (was a fixed 5 s), remembered in the browser. Changing it fetches at once. "Stale" (status in red) after two missed refreshes: 2 × interval + 10 s. |
 | 2026-11-08 | A ↻ button next to the Refresh menu fetches at once, keeping recorded paths and the open details (F5 or "Show" would clear them); the next automatic update comes a full interval later. |
@@ -113,6 +114,7 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 - Rain radar: checked with Playwright replacing RainViewer's tiles by one opaque magenta tile (the one under the centre) and comparing the radar with rain on and off at a grid of points: inside the tile = 70% magenta over the map, outside unchanged. Independent of whether it's raining.
 - The radar's rain layer is drawn opaque onto an offscreen canvas and then put over the map at 70% in one go; drawing each tile translucent would show seams where tiles overlap by a pixel (as with the map dimming).
 - The aircraft pixel check after a refresh missed once by ~4 px (sampled the dark outline of a narrow fuselage): the known race between the response the check read and the one the page drew. Passed on the re-run; the crop (`miss.png`) showed the icon next to the point. Again 2026-11-08 in step 3, ~20 px (SAS44J, fast and low near CPH). Suspect: the `/api/aircraft` response listener reads bodies asynchronously, so `lastApi` can lag the response the page drew. Not fixed yet.
+- Playwright's `mouse.wheel(0, 300)` reaches the page as `deltaY` 150 at device pixel ratio 2 (divided by the DPR); the browser check reads the delta the page got.
 - The browser check sets a 5 s refresh in its own browser storage (`addInitScript`, only if unset), so its timing steps stay short; `refresh` opens a fresh profile to check the 30 s default.
 - The browser check's groups share one page: the always-on steps 1–3 load Copenhagen at 50 km; `location` (6–9) moves it to the airport at 20 km, so it runs after the others. The location's time zone is read from Open-Meteo's answer in the always-on part, because both `weather` and `rain` need it.
 - A page that looks fine in the browser check can look broken to a person: the check opened the first visit and only checked the hint text, while the user saw an empty dark page (the small hint at the top right went unnoticed). Look at the screenshot of the first visit too.
@@ -166,6 +168,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 **Done**
 - Live aircraft (adsb.lol, adsb.fi fallback), refresh every 30 s by default (menu: 5 s to 2 min, remembered), and a ↻ button to fetch at once
+- Mouse-wheel zoom around the location
 - Map filling the left section, north up, a dot at the location (the circular radar with rings and compass was dropped 2026-11-08); ground traffic grey and unlabelled; emergencies red
 - Street map (Esri)
 - List sorted by distance; hover a row to highlight the plane
@@ -223,6 +226,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | Phone step removed from the browser check (laptop only). |
 | 2026-11-08 | ↻ refresh-now button; checked with `--only=refresh`. |
 | 2026-11-08 | Circular radar replaced by a full map (no rings); list = aircraft on the map; feed asked out to the corners. Browser check updated (list vs on-map aircraft, the radius asked for, rain sampled over the whole map); `--only=map,rain,hover,details,location` passed. |
+| 2026-11-08 | Mouse-wheel zoom; checked with `--only=map` (zoom in, list and pixels at the new range, back out). |
 
 ## Open questions
 
