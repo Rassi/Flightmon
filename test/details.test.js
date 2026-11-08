@@ -107,5 +107,8 @@ test('clicking: the nearest aircraft within reach, or none', () => {
   assert.equal(hitTest(view, [a, b], pa.x + 3, pa.y)?.hex, 'a');
   assert.equal(hitTest(view, [a, b], pb.x, pb.y - 2)?.hex, 'b');
   assert.equal(hitTest(view, [a, b], pa.x + 60, pa.y), null);
-  assert.equal(hitTest(view, [{ ...a, distKm: 60 }], pa.x, pa.y), null); // outside the range: not drawn
+  const off = { hex: 'c', lat: 56.2, lon: 12.6, distKm: 58 }; // above the top edge: not drawn
+  const po = view.toScreen(off.lat, off.lon);
+  assert.ok(po.y < 0);
+  assert.equal(hitTest(view, [off], po.x, po.y), null);
 });

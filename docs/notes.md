@@ -38,6 +38,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Retired the "don't build anything that can't be verified" rule: it was for the first iterations, before we knew where things would run. Still test and check what can be checked; the "don't work around refusals" rule stays. |
 | 2026-10-31 | Ways to run it without starting a server (explored, nothing chosen; "leave it for now"): (1) deploy to Cloudflare and use the browser's "Install as app" (own window, also on a phone; needs a manifest + icon); (2) a Chrome/Edge extension, whose pages may fetch the feeds directly when listed in its host permissions (all local, no Cloudflare; loaded unpacked; untested); (3) Electron/Tauri desktop app (overkill: size, signing, per-OS builds); (4) a one-click launcher for `wrangler dev` (still a server). Opening `index.html` from disk can't work: the feeds send no CORS headers. |
 | 2026-10-31 | Clock and weather in the header, rain radar on the map with an on/off button (user asked for all three). Clock: the time at the radar's location (zone from Open-Meteo; the browser's until it answers), with seconds, plus UTC when different. Weather: Open-Meteo "current" (sky, temperature, feels-like, wind from/gusts, visibility, pressure), refreshed every 15 min. Rain: RainViewer's latest radar image at 70% (`--rain-opacity`), on by default, the choice remembered in the browser; image list refreshed every 5 min; the image time is shown under the button. Credits with links under the radar (RainViewer only while rain is shown). No rain animation or forecast (not asked for). |
+| 2026-11-08 | No circular radar: the user didn't like the circle and the range lines. The street map fills the whole left section; no rings, cross, distance labels or compass letters, just a small dot at the location. "Range" is now the distance from the centre to the nearest edge; aircraft are asked for out to the corners (range × diagonal / shorter side, max 463 km), and the list shows exactly the aircraft on the map (status: "N aircraft on the map (50 km to the nearest edge)"). Rain button, legend and credits sit on the map in translucent panels. |
 | 2026-11-08 | Laptop browser only for now: don't spend effort on phone widths. The phone step was dropped from the browser check; the existing narrow-screen CSS stays but isn't checked. |
 | 2026-11-08 | Refresh interval is a "Refresh" menu in the header (5 s, 10 s, 30 s, 1 min, 2 min), default **30 s** (was a fixed 5 s), remembered in the browser. Changing it fetches at once. "Stale" (status in red) after two missed refreshes: 2 × interval + 10 s. |
 | 2026-11-08 | A ↻ button next to the Refresh menu fetches at once, keeping recorded paths and the open details (F5 or "Show" would clear them); the next automatic update comes a full interval later. |
@@ -89,7 +90,7 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 
 **Code**
 - Workers treat every named export of the main module (`src/worker.js`) as an entrypoint and refuse constants: keep it to a default export. Unit tests in Node didn't catch this; only `wrangler dev` did.
-- Map tiles are Web Mercator; the radar draws aircraft, rings and tiles all in that projection so they line up. Drawing aircraft by distance/bearing instead would be ~3 px off at 50 km and kilometres off at long ranges.
+- Map tiles are Web Mercator; the map draws aircraft and tiles all in that projection so they line up. Drawing aircraft by distance/bearing instead would be ~3 px off at 50 km and kilometres off at long ranges.
 - Drawing tiles translucent shows bright seams where they overlap by a pixel; draw opaque and dim with one overlay instead.
 - Map tiles must load with `crossOrigin = 'anonymous'` (Esri sends CORS headers), or the canvas becomes unreadable and the browser check's pixel reads fail.
 - An HTML `required` field blocks the form's submit event before any JS runs: the "paste lat, lon into one field" feature only worked once the split happened on `input`.
@@ -117,6 +118,7 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 - A page that looks fine in the browser check can look broken to a person: the check opened the first visit and only checked the hint text, while the user saw an empty dark page (the small hint at the top right went unnoticed). Look at the screenshot of the first visit too.
 
 **The user's Windows machine**
+- Editing files with a Node script: `s.replace(a, b)` treats `$$`, `$&`, `` $` `` and `$'` in `b` as patterns, so `page.$$eval` became `page.$eval`. Use `s.split(a).join(b)` (or a replacer function).
 - Git Bash and PowerShell; `core.autocrlf=true`, so files are checked out with CRLF line endings: multi-line search-and-replace scripts must match CRLF.
 - Playwright 1.65 installed globally with its Chromium (2026-11-08), so the browser check runs there. Claude in Chrome also works against `http://localhost:8787`. Chrome keeps `flightmon.location` in localStorage between visits: clear it to see a first visit.
 - GitHub says the repo moved to `github.com/Rassi/Flightmon`; pushes to the old URL still work.
@@ -164,7 +166,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 **Done**
 - Live aircraft (adsb.lol, adsb.fi fallback), refresh every 30 s by default (menu: 5 s to 2 min, remembered), and a ↻ button to fetch at once
-- Radar with range rings, compass, north up; ground traffic grey and unlabelled; emergencies red
+- Map filling the left section, north up, a dot at the location (the circular radar with rings and compass was dropped 2026-11-08); ground traffic grey and unlabelled; emergencies red
 - Street map (Esri)
 - List sorted by distance; hover a row to highlight the plane
 - Location: typed, pasted "lat, lon", or the browser's; remembered and in the URL; Copenhagen until one is chosen
@@ -220,6 +222,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | Refresh menu in the header, default 30 s. Checked with `--only=refresh,phone` (one pixel miss in step 3, the known race). |
 | 2026-11-08 | Phone step removed from the browser check (laptop only). |
 | 2026-11-08 | ↻ refresh-now button; checked with `--only=refresh`. |
+| 2026-11-08 | Circular radar replaced by a full map (no rings); list = aircraft on the map; feed asked out to the corners. Browser check updated (list vs on-map aircraft, the radius asked for, rain sampled over the whole map); `--only=map,rain,hover,details,location` passed. |
 
 ## Open questions
 

@@ -46,12 +46,14 @@ const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 let failures = 0;
 // Expected screen position, Web Mercator (textbook asinh form, independent of public/mercator.js).
 function expectedXY(a, center, range, w, h) {
-  const radius = Math.max(10, Math.min(w, h) / 2 - 28);
-  const W = (radius / range) * 2 * Math.PI * 6378.137 * Math.cos(center.lat * Math.PI / 180);
+  const toEdge = Math.max(10, Math.min(w, h) / 2); // the range reaches the nearest edge
+  const W = (toEdge / range) * 2 * Math.PI * 6378.137 * Math.cos(center.lat * Math.PI / 180);
   const merc = (lat, lon) => ({ x: (lon + 180) / 360 * W, y: (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * W });
   const p = merc(a.lat, a.lon), c = merc(center.lat, center.lon);
   return { x: w / 2 + p.x - c.x, y: h / 2 + p.y - c.y };
 }
+// The hex codes in the list (the aircraft on the map).
+const listed = (page) => page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => tr.dataset.hex));
 const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) failures++; return ok; };
 
 (async () => {
@@ -104,7 +106,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
 
   console.log('1. First visit, no location: Copenhagen by default, not saved');
   await page.goto(BASE + '/');
-  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
   check(apiCalls > 0, 'aircraft loaded for the default location');
   check(await page.inputValue('#lat') === '55.6761' && await page.inputValue('#lon') === '12.5683', 'form shows the default (Copenhagen)');
   check(!page.url().includes('lat='), 'default not put in the URL: ' + page.url());
@@ -114,7 +116,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   console.log('2. Paste "55.6761, 12.5683" into latitude, submit');
   await page.fill('#lat', '55.6761, 12.5683');
   await page.click('button[type=submit]');
-  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
   check(page.url().includes('lat=55.6761&lon=12.5683&range=50'), 'URL updated: ' + page.url());
   check(await page.inputValue('#lon') === '12.5683', 'longitude split from the pasted pair');
   check(await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.location')).lat) === 55.6761, 'remembered in localStorage');
@@ -123,19 +125,22 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await page.waitForTimeout(300);
     const api = lastApi;
     const rows = await page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => ({ hex: tr.dataset.hex, cells: [...tr.cells].map((c) => c.textContent) })));
-    check(rows.map((r) => r.hex).join() === api.aircraft.map((a) => a.hex).join(), `${label}: list = API response (${rows.length} aircraft, same order)`);
-    const dists = api.aircraft.map((a) => a.distKm);
-    check(!rows.some((r) => r.cells[0].includes('@')), `${label}: no undecoded '@' callsigns shown`);
-    check(dists.every((d, i) => i === 0 || dists[i - 1] <= d), `${label}: sorted by distance`);
-    // Pixel check: each aircraft is drawn at its projected position.
     const info = await page.evaluate(() => { const c = document.getElementById('radar'); return { w: c.clientWidth, h: c.clientHeight, dpr: devicePixelRatio }; });
-    const alert = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--alert').trim()));
-    const halo = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()));
-    const expectedColor = (a) => (a.emergency ? alert : hexToRgb(altitudeColor(a)));
     const q = new URL(page.url()).searchParams;
     const range = Number(q.get('range'));
     const center = { lat: Number(q.get('lat')), lon: Number(q.get('lon')) };
-    const pts = api.aircraft.map((a) => ({ a, ...expectedXY(a, center, range, info.w, info.h) }));
+    const wantRadius = Math.min(463, Math.ceil(range * Math.hypot(info.w, info.h) / Math.min(info.w, info.h)));
+    check(api.center.radiusKm === wantRadius, `${label}: asked the feed out to the map's corners (${api.center.radiusKm} km for ${range} km to the nearest edge)`);
+    const visible = api.aircraft.filter((a) => { const p = expectedXY(a, center, range, info.w, info.h); return p.x >= 0 && p.x <= info.w && p.y >= 0 && p.y <= info.h; });
+    check(rows.map((r) => r.hex).join() === visible.map((a) => a.hex).join(), `${label}: list = the API's aircraft on the map (${rows.length} of ${api.aircraft.length}, same order)`);
+    const dists = visible.map((a) => a.distKm);
+    check(!rows.some((r) => r.cells[0].includes('@')), `${label}: no undecoded '@' callsigns shown`);
+    check(dists.every((d, i) => i === 0 || dists[i - 1] <= d), `${label}: sorted by distance`);
+    // Pixel check: each aircraft is drawn at its projected position.
+    const alert = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--alert').trim()));
+    const halo = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()));
+    const expectedColor = (a) => (a.emergency ? alert : hexToRgb(altitudeColor(a)));
+    const pts = visible.map((a) => ({ a, ...expectedXY(a, center, range, info.w, info.h) }));
     const pixels = await page.evaluate(({ pts, dpr }) => {
       const ctx = document.getElementById('radar').getContext('2d');
       // A 4×4 device-pixel patch (±1 CSS px) around each projected point.
@@ -151,7 +156,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     });
     if (bad.length) { const box = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y }; }); const p = pts.find((q) => bad[0].startsWith(q.a.hex)); await page.screenshot({ path: OUT + '/miss.png', clip: { x: box.x + p.x - 30, y: box.y + p.y - 30, width: 60, height: 60 } }); }
     check(bad.length === 0, `${label}: ${ok}/${pts.length} aircraft drawn at their projected pixel` + (bad.length ? ' — off: ' + bad.join('; ') : ''));
-    return { api, rows };
+    return { api, rows, visible };
   }
 
   console.log('3. Live data vs page');
@@ -274,18 +279,16 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       await rp.screenshot({ path: OUT + '/weather.png', clip: { x: 0, y: 0, width: 1440, height: 70 } });
     }
     const dimsR = await rp.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
-    const R = Math.min(dimsR.w, dimsR.h) / 2 - 28;
+    const R = Math.min(dimsR.w, dimsR.h) / 2; // centre to the nearest edge
     const W = (R / 50) * 2 * Math.PI * 6378.137 * Math.cos(center.lat * Math.PI / 180);
     const [z] = mark ?? [asked[0]?.[0]];
     const tilePx = W / 2 ** z;
     const cWorld = { x: (center.lon + 180) / 360 * W, y: (1 - Math.asinh(Math.tan(center.lat * Math.PI / 180)) / Math.PI) / 2 * W };
-    // Sample points on a grid inside the radar, away from tile edges, the cross, rings and ring labels.
+    // Sample points on a grid over the map, away from tile edges and the centre dot.
     const pts = [];
     for (let gx = -1; gx <= 1; gx += 0.08) for (let gy = -1; gy <= 1; gy += 0.08) {
       const dx = gx * R, dy = gy * R, d = Math.hypot(dx, dy);
-      if (d > R - 6 || Math.abs(dx) < 5 || Math.abs(dy) < 5) continue;
-      if ([1, 2, 3, 4, 5].some((k) => Math.abs(d - (k * R) / 5) < 6)) continue;
-      if (dx > 0 && dy < 0 && Math.atan2(dx, -dy) < 50 * Math.PI / 180) continue; // labels sit at ~21°
+      if (d < 8 || Math.abs(dx) > dimsR.w / 2 - 4 || Math.abs(dy) > dimsR.h / 2 - 4) continue; // centre dot, canvas edges
       const wx = cWorld.x + dx, wy = cWorld.y + dy;
       const fx = wx / tilePx, fy = wy / tilePx;
       if (Math.min(fx % 1, 1 - (fx % 1)) * tilePx < 4 || Math.min(fy % 1, 1 - (fy % 1)) * tilePx < 4) continue;
@@ -338,7 +341,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(await page.evaluate(() => localStorage.getItem('flightmon.refresh')) === '10', 'a new interval is remembered');
     await page.selectOption('#refresh', '5');
     // The ↻ button: fetches now, keeps the selection.
-    await page.click(`#aircraft tbody tr[data-hex="${lastApi.aircraft[0].hex}"]`);
+    await page.click(`#aircraft tbody tr[data-hex="${(await listed(page))[0]}"]`);
     await page.waitForSelector('#details:not([hidden]) h2');
     const sel = await page.textContent('#details h2');
     await page.waitForTimeout(500);
@@ -358,7 +361,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
 
   if (!want('hover')) skipped('5', 'hover'); else {
     console.log('5. Hover a list row highlights its plane');
-    const firstAir = lastApi.aircraft.find((a) => !a.onGround) || lastApi.aircraft[0];
+    const inList = await listed(page);
+    const firstAir = lastApi.aircraft.find((a) => inList.includes(a.hex) && !a.onGround) || lastApi.aircraft.find((a) => inList.includes(a.hex));
     await page.hover(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`);
     const dims = await page.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
     const hxy = expectedXY(firstAir, { lat: 55.6761, lon: 12.5683 }, 50, dims.w, dims.h);
@@ -387,7 +391,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const placed = lastApi.aircraft.map((a) => ({ a, ...expectedXY(a, center, 50, dims2.w, dims2.h) }));
     // An airborne aircraft with a callsign and no other aircraft within 30 px, so the click is unambiguous.
     // Prefer a fast one, so its recorded path grows quickly enough to check.
-    const separate = placed.filter((p) => p.a.callsign && !p.a.onGround && placed.every((q) => q === p || Math.hypot(q.x - p.x, q.y - p.y) > 30));
+    const onScreen = (p) => p.x > 10 && p.x < dims2.w - 10 && p.y > 10 && p.y < dims2.h - 10;
+    const separate = placed.filter((p) => p.a.callsign && !p.a.onGround && onScreen(p) && placed.every((q) => q === p || Math.hypot(q.x - p.x, q.y - p.y) > 30));
     const target = separate.find((p) => p.a.speedKmh > 350) ?? separate[0];
     if (!target) {
       check(false, 'no clearly separate airborne aircraft with a callsign to click');
@@ -429,9 +434,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
         check(/^since \d\d[:.]\d\d \(OpenSky\)$/.test(pathFact) && (await page.textContent('#details')).includes('The OpenSky Network'), `track from OpenSky: ${trBody.path.length} points, card says "${pathFact}", credited`);
         await page.waitForTimeout(300);
         const pageOpened = Date.now() / 1000 - 60;
-        const radius = Math.min(dims2.w, dims2.h) / 2 - 28;
         const nowList = lastApi.aircraft.map((a) => expectedXY(a, center, 50, dims2.w, dims2.h));
-        const free = (m) => Math.hypot(m.x - dims2.w / 2, m.y - dims2.h / 2) < radius - 4
+        const free = (m) => m.x > 4 && m.x < dims2.w - 4 && m.y > 4 && m.y < dims2.h - 4
           && nowList.every((q) => Math.hypot(q.x - m.x, q.y - m.y) > 22 && !(m.x > q.x - 5 && m.x < q.x + 110 && Math.abs(m.y - q.y) < 12));
         const mids = [];
         for (let i = 1; i < trBody.path.length; i++) {
@@ -509,7 +513,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       await page.mouse.click(dims2.x + empty.x, dims2.y + empty.y);
       check(await page.$eval('#details', (e) => e.hidden), 'click on empty radar closes the details');
 
-      const other = lastApi.aircraft.find((a) => a.hex !== target.a.hex) || target.a;
+      const inList = await listed(page);
+      const other = lastApi.aircraft.find((a) => a.hex !== target.a.hex && inList.includes(a.hex)) || target.a;
       await page.click(`#aircraft tbody tr[data-hex="${other.hex}"]`);
       await page.waitForSelector('#details:not([hidden]) h2');
       check((await page.textContent('#details h2')) === (other.callsign ?? other.reg ?? other.hex.toUpperCase()), `click a list row: details for ${other.callsign ?? other.reg ?? other.hex}`);
@@ -524,16 +529,16 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await page.fill('#range', '20');
     await page.click('#locate');
     await page.waitForFunction(() => location.search.includes('lat=55.618'));
-    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('within 20 km'));
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('(20 km to the nearest edge)'));
     check(page.url().includes('lat=55.618&lon=12.656&range=20'), 'URL: ' + page.url());
     const r2 = await verifyAgainstApi('airport, 20 km');
-    check(r2.api.center.radiusKm === 20 && r2.api.aircraft.every((a) => a.distKm <= 20), 'all within 20 km');
+    check(r2.visible.every((a) => a.distKm <= r2.api.center.radiusKm), 'all listed aircraft within what the feed was asked for');
 
     console.log('7. Reload: location comes back from the URL; new tab without params: from localStorage');
-    await page.reload(); await page.waitForFunction(() => document.querySelector('#status').textContent.includes('within 20 km'));
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#status').textContent.includes('(20 km to the nearest edge)'));
     check(true, 'reload keeps location');
     const p2 = await context.newPage(); await p2.goto(BASE + '/');
-    await p2.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
+    await p2.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
     check(await p2.inputValue('#lat') === '55.618', 'new tab restored from localStorage');
     await p2.close();
 

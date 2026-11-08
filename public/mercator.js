@@ -1,5 +1,5 @@
-// Web Mercator, the projection map tiles use. The radar draws everything in
-// it (tiles, aircraft, rings) so they line up exactly, centred on a location
+// Web Mercator, the projection map tiles use. The map draws everything in
+// it (tiles, aircraft) so they line up exactly, centred on a location
 // and scaled so that `rangeKm` at the centre spans `radiusPx`.
 
 const MERCATOR_RADIUS_KM = 6378.137; // the sphere Web Mercator is defined on

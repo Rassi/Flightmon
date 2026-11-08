@@ -1,25 +1,28 @@
-// The radar: range rings around the chosen location, north up, and each
-// aircraft at its position, pointing along its track. Everything is drawn in
-// Web Mercator (see mercator.js) so it lines up with the map underneath.
+// The map: the street map filling the canvas, centred on the chosen location,
+// north up, and each aircraft at its position, pointing along its track.
+// `rangeKm` is the distance from the centre to the nearest edge. Everything is
+// drawn in Web Mercator (see mercator.js) so it lines up with the map tiles.
 
 import { altitudeColor } from './altitude.js';
 import { displayName } from './format.js';
 import { drawIcon, iconKind } from './icons.js';
-import { makeView, ringPoints } from './mercator.js';
+import { makeView } from './mercator.js';
 
-// Ring spacing of roughly a quarter of the range, rounded to 1, 2 or 5 × 10ⁿ km.
-export function ringStep(rangeKm) {
-  const rough = rangeKm / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(rough));
-  const step = [1, 2, 5, 10].find((m) => m * magnitude >= rough * 0.75) * magnitude;
-  return step;
+export function mapView(center, rangeKm, width, height) {
+  const toEdge = Math.max(10, Math.min(width, height) / 2);
+  return makeView(center, rangeKm, toEdge, width, height);
 }
 
-const MARGIN = 28;
+// How far out to ask for aircraft so the corners of the map are covered too.
+export function cornerRangeKm(rangeKm, width, height) {
+  if (!(width > 0 && height > 0)) return rangeKm * Math.SQRT2;
+  return (rangeKm * Math.hypot(width, height)) / Math.min(width, height);
+}
 
-export function radarView(center, rangeKm, width, height) {
-  const radius = Math.max(10, Math.min(width, height) / 2 - MARGIN);
-  return makeView(center, rangeKm, radius, width, height);
+// Whether an aircraft is on the visible map.
+export function onMap(view, ac) {
+  const p = view.toScreen(ac.lat, ac.lon);
+  return p.x >= 0 && p.x <= view.width && p.y >= 0 && p.y <= view.height;
 }
 
 // The aircraft nearest to screen point (x, y), within `maxPx`; null if none.
@@ -27,7 +30,7 @@ export function hitTest(view, aircraft, x, y, maxPx = 18) {
   let best = null;
   let bestD = maxPx;
   for (const ac of aircraft) {
-    if (ac.distKm > view.rangeKm) continue;
+    if (!onMap(view, ac)) continue;
     const p = view.toScreen(ac.lat, ac.lon);
     const d = Math.hypot(p.x - x, p.y - y);
     if (d <= bestD) {
@@ -38,33 +41,28 @@ export function hitTest(view, aircraft, x, y, maxPx = 18) {
   return best;
 }
 
-// `background(ctx, view)` draws the map; it is clipped to the outer ring.
+// `background(ctx, view)` draws the map tiles (and rain).
 // `highlight`: a Set of hex codes to draw white with a ring.
 // `trail`: points [{ lat, lon, altM, onGround }] flown by the selected aircraft.
-export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highlight = new Set(), trail, colors, background }) {
+export function drawMap(ctx, { width, height, center, aircraft, rangeKm, highlight = new Set(), trail, colors, background }) {
   ctx.clearRect(0, 0, width, height);
-  const view = radarView(center, rangeKm, width, height);
-  const outer = ringPoints(view, rangeKm);
+  const view = mapView(center, rangeKm, width, height);
 
-  if (background) {
-    ctx.save();
-    pathThrough(ctx, outer);
-    ctx.clip();
-    background(ctx, view);
-    ctx.restore();
-  }
+  if (background) background(ctx, view);
+  if (trail && trail.length > 1) drawTrail(ctx, view, trail, colors.halo);
 
-  drawRings(ctx, view, outer, colors);
-  if (trail && trail.length > 1) {
-    ctx.save();
-    pathThrough(ctx, outer);
-    ctx.clip();
-    drawTrail(ctx, view, trail, colors.halo);
-    ctx.restore();
-  }
+  // The chosen location: a small dot.
+  const c = view.toScreen(center.lat, center.lon);
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = colors.accent;
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = colors.halo;
+  ctx.stroke();
+  ctx.fill();
 
   // Ground traffic underneath, then airborne from low to high, highlight last.
-  const order = [...aircraft].sort((a, b) =>
+  const order = aircraft.filter((ac) => onMap(view, ac)).sort((a, b) =>
     highlight.has(a.hex) - highlight.has(b.hex) ||
     (b.onGround - a.onGround) ||
     ((a.altM ?? 0) - (b.altM ?? 0)));
@@ -74,7 +72,6 @@ export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highl
   ctx.textAlign = 'left';
   ctx.lineJoin = 'round';
   for (const ac of order) {
-    if (ac.distKm > rangeKm) continue;
     const p = view.toScreen(ac.lat, ac.lon);
     const highlighted = highlight.has(ac.hex);
     const color = highlighted ? colors.highlight
@@ -90,12 +87,6 @@ export function drawRadar(ctx, { width, height, center, aircraft, rangeKm, highl
   return view;
 }
 
-function pathThrough(ctx, points) {
-  ctx.beginPath();
-  points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-  ctx.closePath();
-}
-
 // Text with an outline in the background colour, readable over the map.
 function haloText(ctx, text, x, y, color, halo) {
   ctx.lineWidth = 3;
@@ -103,56 +94,6 @@ function haloText(ctx, text, x, y, color, halo) {
   ctx.strokeText(text, x, y);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
-}
-
-function drawRings(ctx, view, outer, colors) {
-  const { rangeKm } = view;
-  const step = ringStep(rangeKm);
-  const c = view.toScreen(view.center.lat, view.center.lon);
-  const north = outer[0];
-  const east = outer[outer.length / 4];
-  const south = outer[outer.length / 2];
-  const west = outer[(outer.length * 3) / 4];
-
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = colors.ring;
-  ctx.beginPath();
-  ctx.moveTo(west.x, west.y); ctx.lineTo(east.x, east.y);
-  ctx.moveTo(north.x, north.y); ctx.lineTo(south.x, south.y);
-  ctx.stroke();
-
-  const rings = [];
-  for (let d = step; d < rangeKm - step * 0.25; d += step) rings.push(d);
-  rings.push(rangeKm);
-
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'bottom';
-  ctx.lineJoin = 'round';
-  for (const d of rings) {
-    // 120 points: index 7 is at 21°, just right of north, for the label.
-    const points = d === rangeKm ? outer : ringPoints(view, d);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = d === rangeKm ? colors.ringStrong : colors.ring;
-    pathThrough(ctx, points);
-    ctx.stroke();
-    haloText(ctx, `${Number(d.toFixed(1))} km`, points[7].x + 3, points[7].y, colors.muted, colors.halo);
-  }
-
-  ctx.font = '600 12px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = colors.muted;
-  ctx.fillText('N', north.x, north.y - 14);
-  ctx.fillText('E', east.x + 14, east.y);
-  ctx.fillText('S', south.x, south.y + 14);
-  ctx.fillText('W', west.x - 14, west.y);
-  ctx.textAlign = 'left';
-
-  ctx.fillStyle = colors.ringStrong;
-  ctx.beginPath();
-  ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
-  ctx.fill();
 }
 
 function drawRing(ctx, x, y, r, color, halo) {

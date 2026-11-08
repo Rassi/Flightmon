@@ -3,7 +3,7 @@ import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
-import { drawRadar, hitTest } from './radar.js';
+import { cornerRangeKm, drawMap, hitTest, mapView, onMap } from './radar.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
 import {
   climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
@@ -167,8 +167,10 @@ async function poll() {
 
   const ctrl = (controller = new AbortController());
   const { lat, lon, rangeKm } = state.location;
+  // Out to the map's corners, within what the feeds allow.
+  const radius = Math.min(MAX_RANGE_KM, Math.ceil(cornerRangeKm(rangeKm, els.canvas.clientWidth, els.canvas.clientHeight)));
   try {
-    const res = await fetch(`/api/aircraft?lat=${lat}&lon=${lon}&radius=${rangeKm}`, { signal: ctrl.signal });
+    const res = await fetch(`/api/aircraft?lat=${lat}&lon=${lon}&radius=${radius}`, { signal: ctrl.signal });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detail = body.failures ? ` (${body.failures.join('; ')})` : '';
@@ -353,8 +355,7 @@ function cssColors() {
   const style = getComputedStyle(document.documentElement);
   const get = (name) => style.getPropertyValue(name).trim();
   return {
-    ring: get('--ring'),
-    ringStrong: get('--ring-strong'),
+    accent: get('--accent'),
     muted: get('--muted'),
     alert: get('--alert'),
     highlight: get('--highlight'),
@@ -375,9 +376,11 @@ function queueDraw() {
   });
 }
 
-function aircraftInRange() {
+// The aircraft on the visible map (the list shows exactly these).
+function aircraftOnMap() {
   if (!state.data || !state.location) return [];
-  return state.data.aircraft.filter((ac) => ac.distKm <= state.location.rangeKm);
+  const view = mapView(state.location, state.location.rangeKm, els.canvas.clientWidth, els.canvas.clientHeight);
+  return state.data.aircraft.filter((ac) => onMap(view, ac));
 }
 
 function drawCanvas() {
@@ -396,11 +399,11 @@ function drawCanvas() {
     return;
   }
   const colors = cssColors();
-  lastView = drawRadar(ctx, {
+  lastView = drawMap(ctx, {
     width,
     height,
     center: state.location,
-    aircraft: aircraftInRange(),
+    aircraft: aircraftOnMap(),
     rangeKm: state.location.rangeKm,
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
     trail: selectedTrail(),
@@ -457,7 +460,7 @@ function renderLegend() {
 }
 
 function renderList() {
-  const list = aircraftInRange();
+  const list = aircraftOnMap();
   const rows = list.map((ac) => {
     const tr = document.createElement('tr');
     tr.dataset.hex = ac.hex;
@@ -486,7 +489,7 @@ function renderList() {
   els.rows.replaceChildren(...rows);
   els.empty.hidden = !state.data || list.length > 0;
   if (state.data && state.location) {
-    els.empty.textContent = `No aircraft within ${state.location.rangeKm} km right now.`;
+    els.empty.textContent = 'No aircraft on the map right now.';
   }
 }
 
@@ -504,12 +507,12 @@ function renderStatus() {
     showStatus(state.error ? `Couldn't load aircraft: ${state.error}` : 'Loading aircraft…', Boolean(state.error));
     return;
   }
-  const count = aircraftInRange().length;
+  const count = aircraftOnMap().length;
   const ago = Math.max(0, Math.round((Date.now() - state.lastOk) / 1000));
   // Stale when two refreshes have been missed (20 s at 5 s, 70 s at 30 s).
   const stale = Date.now() - state.lastOk > (2 * state.refreshS + 10) * 1000;
   const parts = [
-    `${count} aircraft within ${state.location.rangeKm} km`,
+    `${count} aircraft on the map (${state.location.rangeKm} km to the nearest edge)`,
     `from ${state.data.source}`,
     `updated ${ago} s ago`,
   ];
@@ -606,7 +609,7 @@ els.rows.addEventListener('mouseover', (event) => {
 });
 els.rows.addEventListener('click', (event) => {
   const hex = event.target.closest('tr')?.dataset.hex;
-  const ac = hex && aircraftInRange().find((a) => a.hex === hex);
+  const ac = hex && aircraftOnMap().find((a) => a.hex === hex);
   if (ac) select(ac);
 });
 els.rows.addEventListener('mouseleave', () => {
@@ -618,7 +621,7 @@ els.rows.addEventListener('mouseleave', () => {
 // Click an aircraft on the radar for its details; click elsewhere to close them.
 function aircraftAt(event) {
   if (!lastView) return null;
-  return hitTest(lastView, aircraftInRange(), event.offsetX, event.offsetY);
+  return hitTest(lastView, aircraftOnMap(), event.offsetX, event.offsetY);
 }
 els.canvas.addEventListener('click', (event) => {
   const ac = aircraftAt(event);
@@ -640,7 +643,8 @@ try {
 loadRefresh();
 renderRain();
 renderLegend();
-new ResizeObserver(drawCanvas).observe(els.canvas);
+// A new size shows more or less of the map, so the list changes too.
+new ResizeObserver(() => render()).observe(els.canvas);
 setInterval(renderStatus, 1000);
 // Tick just after each whole second, so the clock doesn't lag behind.
 (function tick() {
