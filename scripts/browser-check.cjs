@@ -8,9 +8,10 @@
 // 1–3). The rest are groups; --only runs just those (the full run asks the
 // flight feeds for a lot, and they answer 429 when asked too often):
 //   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
-//   location (6–9: use my location, reload, invalid input, feed failure), phone (10)
+//   location (6–9: use my location, reload, invalid input, feed failure)
 // The main pages run with a 5 s refresh (set in their browser storage) so the
-// timing checks don't take minutes; the phone page checks the 30 s default.
+// timing checks don't take minutes; `refresh` checks the 30 s default in a fresh profile.
+// Laptop browser only: phone widths aren't checked (user's choice, 2026-11-08).
 // A 502 from /api/aircraft because every feed answered 429 is a warning, not a
 // failure: the feeds refused, the page is fine (step 9 checks it copes).
 //
@@ -19,7 +20,7 @@
 // Checks: list = API response, each aircraft drawn at its expected pixel
 // (Web Mercator computed independently of public/mercator.js), map tiles load,
 // refresh, hover highlight, "use my location", reload/localStorage, invalid
-// input, feed failure, phone width, no console errors; clock in the location's
+// input, feed failure, no console errors; clock in the location's
 // time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
 // exactly (checked with a synthetic tile) and the rain on/off switch. Screenshots go to the
 // given directory (default: the system temp dir); look at them too: a tile
@@ -30,7 +31,7 @@ const { chromium } = require('playwright');
 const BASE = process.env.FLIGHTMON_URL || 'http://127.0.0.1:8787';
 const args = process.argv.slice(2);
 const OUT = args.find((a) => !a.startsWith('--')) || os.tmpdir();
-const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'location', 'phone'];
+const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'location'];
 const onlyArg = args.find((a) => a.startsWith('--only='));
 const only = onlyArg ? onlyArg.slice('--only='.length).split(',').filter(Boolean) : null;
 if (only?.some((g) => !GROUPS.includes(g))) {
@@ -336,6 +337,11 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(apiCalls > n, 'a new interval fetches straight away');
     check(await page.evaluate(() => localStorage.getItem('flightmon.refresh')) === '10', 'a new interval is remembered');
     await page.selectOption('#refresh', '5');
+    // A fresh browser profile (no stored choice): the default.
+    const fresh = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await fresh.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
+    check(await fresh.inputValue('#refresh') === '30', 'refresh is 30 s by default');
+    await fresh.close();
   }
   await page.screenshot({ path: OUT + '/radar-1440.png' });
 
@@ -535,27 +541,6 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await page.unroute('**/api/aircraft*');
     errors.splice(errorsBefore); // the 502s injected above are expected
     injecting = false;
-  }
-
-  if (!want('phone')) skipped('10', 'phone'); else {
-    console.log('10. Phone width (390 px)');
-    const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
-    await phone.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
-    await phone.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
-    const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    check(overflow <= 0, `no horizontal page scroll (overflow ${overflow}px)`);
-    const gap = await phone.evaluate(() => document.getElementById('status').getBoundingClientRect().top - document.getElementById('radar').getBoundingClientRect().bottom);
-    check(gap >= 0, `status line starts below the radar (gap ${gap}px)`);
-    const overlaps = await phone.evaluate(() => {
-      const r = document.getElementById('radar').getBoundingClientRect();
-      return ['legend', 'attribution'].filter((id) => document.getElementById(id).getBoundingClientRect().top < r.bottom - 1);
-    });
-    check(overlaps.length === 0, 'legend and attribution below the radar' + (overlaps.length ? ': overlapping ' + overlaps.join(', ') : ''));
-    const sq = await phone.$eval('#radar', (c) => [c.clientWidth, c.clientHeight]);
-    check(sq[0] === sq[1], `radar is square on a phone: ${sq.join('×')}`);
-    // A fresh browser: the default refresh.
-    check(await phone.inputValue('#refresh') === '30', 'refresh is 30 s by default');
-    await phone.screenshot({ path: OUT + '/radar-390.png', fullPage: true });
   }
 
   check(errors.length === 0, 'no console errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
