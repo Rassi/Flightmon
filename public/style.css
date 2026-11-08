@@ -58,6 +58,7 @@ input, select {
 }
 #range { width: 5em; }
 select { width: auto; }
+#refresh-now { margin-left: 4px; padding: 5px 9px; }
 
 button {
   padding: 5px 12px;

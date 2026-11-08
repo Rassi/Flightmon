@@ -36,6 +36,7 @@ const els = {
   clockUtc: $('clock-utc'),
   weather: $('weather'),
   refresh: $('refresh'),
+  refreshNow: $('refresh-now'),
   rainToggle: $('rain-toggle'),
   rainStatus: $('rain-status'),
   legend: $('legend'),
@@ -197,6 +198,9 @@ function loadRefresh() {
   state.refreshS = REFRESH_CHOICES_S.includes(saved) ? saved : DEFAULT_REFRESH_S;
   els.refresh.value = String(state.refreshS);
 }
+
+// Fetch now (paths and the open details stay); the next one comes a full interval later.
+els.refreshNow.addEventListener('click', () => poll());
 
 // A new interval: fetch now, then keep to it.
 els.refresh.addEventListener('change', () => {

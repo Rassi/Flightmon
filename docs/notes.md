@@ -40,6 +40,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-10-31 | Clock and weather in the header, rain radar on the map with an on/off button (user asked for all three). Clock: the time at the radar's location (zone from Open-Meteo; the browser's until it answers), with seconds, plus UTC when different. Weather: Open-Meteo "current" (sky, temperature, feels-like, wind from/gusts, visibility, pressure), refreshed every 15 min. Rain: RainViewer's latest radar image at 70% (`--rain-opacity`), on by default, the choice remembered in the browser; image list refreshed every 5 min; the image time is shown under the button. Credits with links under the radar (RainViewer only while rain is shown). No rain animation or forecast (not asked for). |
 | 2026-11-08 | Laptop browser only for now: don't spend effort on phone widths. The phone step was dropped from the browser check; the existing narrow-screen CSS stays but isn't checked. |
 | 2026-11-08 | Refresh interval is a "Refresh" menu in the header (5 s, 10 s, 30 s, 1 min, 2 min), default **30 s** (was a fixed 5 s), remembered in the browser. Changing it fetches at once. "Stale" (status in red) after two missed refreshes: 2 × interval + 10 s. |
+| 2026-11-08 | A ↻ button next to the Refresh menu fetches at once, keeping recorded paths and the open details (F5 or "Show" would clear them); the next automatic update comes a full interval later. |
 | 2026-11-08 | Browser check: the user asked not to run every check every time, to avoid the feeds' 429s; feeds refusing with 429 is a warning (user's choice), any other failure still fails. |
 | 2026-11-08 | First visit with no location shows Copenhagen at 50 km (user chose this over asking for the browser's location or a clearer message). The default isn't saved or put in the URL until the user picks a place. |
 
@@ -162,7 +163,7 @@ and [deskradar](https://github.com/arvis91/deskradar) (not looked at).
 From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 **Done**
-- Live aircraft (adsb.lol, adsb.fi fallback), refresh every 30 s by default (menu: 5 s to 2 min, remembered)
+- Live aircraft (adsb.lol, adsb.fi fallback), refresh every 30 s by default (menu: 5 s to 2 min, remembered), and a ↻ button to fetch at once
 - Radar with range rings, compass, north up; ground traffic grey and unlabelled; emergencies red
 - Street map (Esri)
 - List sorted by distance; hover a row to highlight the plane
@@ -218,6 +219,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | Browser check: `--only=group,…` runs the always-on steps 1–3 plus the named groups; a 502 from both feeds answering 429 is a warning, not a failure. |
 | 2026-11-08 | Refresh menu in the header, default 30 s. Checked with `--only=refresh,phone` (one pixel miss in step 3, the known race). |
 | 2026-11-08 | Phone step removed from the browser check (laptop only). |
+| 2026-11-08 | ↻ refresh-now button; checked with `--only=refresh`. |
 
 ## Open questions
 

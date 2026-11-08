@@ -337,6 +337,17 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(apiCalls > n, 'a new interval fetches straight away');
     check(await page.evaluate(() => localStorage.getItem('flightmon.refresh')) === '10', 'a new interval is remembered');
     await page.selectOption('#refresh', '5');
+    // The ↻ button: fetches now, keeps the selection.
+    await page.click(`#aircraft tbody tr[data-hex="${lastApi.aircraft[0].hex}"]`);
+    await page.waitForSelector('#details:not([hidden]) h2');
+    const sel = await page.textContent('#details h2');
+    await page.waitForTimeout(500);
+    const n2 = apiCalls;
+    await page.click('#refresh-now');
+    for (let t = 0; t < 10 && apiCalls === n2; t++) await page.waitForTimeout(300);
+    check(apiCalls > n2, '↻ fetches straight away');
+    check(!(await page.$eval('#details', (e) => e.hidden)) && (await page.textContent('#details h2')) === sel, `↻ keeps the open details (${sel})`);
+    await page.keyboard.press('Escape');
     // A fresh browser profile (no stored choice): the default.
     const fresh = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await fresh.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
