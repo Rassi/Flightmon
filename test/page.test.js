@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { climbArrow, compass, displayName, formatAltitude, formatDistance, formatSpeed } from '../public/format.js';
-import { cornerRangeKm, mapView, onMap } from '../public/radar.js';
+import { cornerRangeKm, mapView, maxRangeKm, onMap } from '../public/radar.js';
+import { delayMs, isRateLimited, nextBackoffS } from '../public/polling.js';
 
 test('compass points', () => {
   assert.equal(compass(0), 'N');
@@ -55,4 +56,35 @@ test('on the map: inside the visible rectangle, corners included', () => {
   assert.ok(onMap(view, { lat: center.lat, lon: center.lon + 0.95 })); // ~60 km east: inside the wider side
   assert.ok(!onMap(view, { lat: center.lat + 0.5, lon: center.lon })); // ~56 km north: past the top
   assert.ok(!onMap(view, { lat: center.lat, lon: center.lon + 1.3 })); // ~81 km east: past the right
+});
+
+test('zoom-out cap: the feeds still reach the corners', () => {
+  assert.equal(maxRangeKm(1000, 800), Math.floor(463 * 800 / Math.hypot(1000, 800))); // 289
+  assert.ok(cornerRangeKm(maxRangeKm(1000, 800), 1000, 800) <= 463);
+  assert.equal(maxRangeKm(800, 800), Math.floor(463 / Math.SQRT2)); // 327
+  assert.equal(maxRangeKm(0, 0), 463); // not laid out yet
+});
+
+test('requests: at least 5 s apart, refreshes on time, longer waits after a 429', () => {
+  const t = 1_000_000;
+  // Moving the map right after a request waits out the 5 s.
+  assert.equal(delayMs({ now: t + 1000, lastAt: t, wanted: true, refreshS: 30 }), 4000);
+  assert.equal(delayMs({ now: t + 9000, lastAt: t, wanted: true, refreshS: 30 }), 0);
+  // Otherwise the next refresh, counted from the last request.
+  assert.equal(delayMs({ now: t + 2000, lastAt: t, wanted: false, refreshS: 30 }), 28000);
+  // Backing off: nothing before it's over, even when wanted.
+  assert.equal(delayMs({ now: t + 1000, lastAt: t, wanted: true, refreshS: 30, backoffS: 60 }), 59000);
+  assert.equal(nextBackoffS(0, 30), 60);
+  assert.equal(nextBackoffS(60, 30), 120);
+  assert.equal(nextBackoffS(120, 30), 120);
+  assert.equal(nextBackoffS(0, 5), 10);
+  assert.equal(nextBackoffS(80, 5), 120);
+});
+
+test('rate-limited: a 429, or a 502 when every feed answered 429', () => {
+  assert.ok(isRateLimited(429, {}));
+  assert.ok(isRateLimited(502, { failures: ['adsb.lol: HTTP 429', 'adsb.fi: HTTP 429'] }));
+  assert.ok(!isRateLimited(502, { failures: ['adsb.lol: HTTP 429', 'adsb.fi: HTTP 503'] }));
+  assert.ok(!isRateLimited(502, { failures: [] }));
+  assert.ok(!isRateLimited(500, null));
 });

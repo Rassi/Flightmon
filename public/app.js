@@ -3,7 +3,8 @@ import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
-import { cornerRangeKm, drawMap, hitTest, mapView, onMap } from './radar.js';
+import { cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap } from './radar.js';
+import { delayMs, isRateLimited, nextBackoffS } from './polling.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
 import { distanceKm } from './geo.js';
 import {
@@ -82,6 +83,12 @@ function loadView() {
   return { ...HOME, rangeKm: DEFAULT_RANGE_KM };
 }
 
+// A smaller window (or a saved map from a bigger one) can't show as far out.
+function clampZoom() {
+  const maxKm = maxRangeKm(els.canvas.clientWidth, els.canvas.clientHeight, MAX_RANGE_KM);
+  if (state.view.rangeKm > maxKm) state.view = { ...state.view, rangeKm: maxKm };
+}
+
 function saveView() {
   try {
     localStorage.setItem(VIEW_KEY, JSON.stringify(state.view));
@@ -101,7 +108,7 @@ function settle() {
   clearTimeout(settleTimer);
   settleTimer = setTimeout(() => {
     saveView();
-    poll();
+    requestPoll();
   }, 400);
 }
 
@@ -110,7 +117,7 @@ els.home.addEventListener('click', () => {
   zoomTarget = null;
   saveView();
   render();
-  poll();
+  requestPoll();
 });
 
 // The range changes smoothly while scrolling (the exact value is kept here, the
@@ -123,9 +130,11 @@ els.canvas.parentElement.addEventListener('wheel', (event) => {
   event.preventDefault();
   // Pixels, lines or pages, depending on the device.
   const px = event.deltaY * (event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 800 : 1);
+  // Not further out than the feeds reach into the map's corners.
+  const maxKm = maxRangeKm(els.canvas.clientWidth, els.canvas.clientHeight, MAX_RANGE_KM);
   zoomTarget ??= state.view.rangeKm;
-  zoomTarget = Math.min(MAX_RANGE_KM, Math.max(1, zoomTarget * Math.exp(px * 0.0015)));
-  const rangeKm = roundRange(zoomTarget);
+  zoomTarget = Math.min(maxKm, Math.max(1, zoomTarget * Math.exp(px * 0.0015)));
+  const rangeKm = Math.min(maxKm, roundRange(zoomTarget));
   if (rangeKm === state.view.rangeKm) return;
   const box = els.canvas.getBoundingClientRect();
   const x = event.clientX - box.left;
@@ -173,40 +182,62 @@ els.canvas.addEventListener('pointercancel', endDrag);
 // --- polling ----------------------------------------------------------------
 
 let timer = null;
-let controller = null;
+let inFlight = false;
+let lastFetchAt = 0; // when the last request started
+let wanted = false; // a request is due as soon as allowed (the map moved, ↻, …)
+let backoffS = 0; // > 0 after the feeds refused for asking too often
+let nextAt = 0; // when the next request is planned
+
+// Plan the next request: the next refresh, or sooner when one is wanted, but
+// never within 5 s of the last one and not before a back-off is over.
+function schedule() {
+  clearTimeout(timer);
+  const now = Date.now();
+  const d = delayMs({ now, lastAt: lastFetchAt, wanted, refreshS: state.refreshS, backoffS });
+  nextAt = now + d;
+  timer = setTimeout(poll, d);
+}
+
+// Ask for aircraft as soon as allowed (a request under way finishes first).
+function requestPoll() {
+  wanted = true;
+  if (!inFlight) schedule();
+}
 
 async function poll() {
   clearTimeout(timer);
   timer = null;
-  controller?.abort();
-  if (document.hidden) return;
-
-  const ctrl = (controller = new AbortController());
+  if (document.hidden) return; // resumes when the tab is shown again
+  wanted = false;
+  inFlight = true;
+  lastFetchAt = Date.now();
   const { rangeKm } = state.view;
   const lat = state.view.lat.toFixed(4);
   const lon = state.view.lon.toFixed(4);
   // Out to the map's corners, within what the feeds allow.
   const radius = Math.min(MAX_RANGE_KM, Math.ceil(cornerRangeKm(rangeKm, els.canvas.clientWidth, els.canvas.clientHeight)));
   try {
-    const res = await fetch(`/api/aircraft?lat=${lat}&lon=${lon}&radius=${radius}`, { signal: ctrl.signal });
+    const res = await fetch(`/api/aircraft?lat=${lat}&lon=${lon}&radius=${radius}`);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detail = body.failures ? ` (${body.failures.join('; ')})` : '';
-      throw new Error((body.error || `HTTP ${res.status}`) + detail);
+      const err = new Error((body.error || `HTTP ${res.status}`) + detail);
+      err.rateLimited = isRateLimited(res.status, body);
+      throw err;
     }
     // Distances from home, wherever the map is; the list is sorted by them.
     state.data = fromHome(body);
     trails.record(body);
     state.lastOk = Date.now();
     state.error = null;
+    backoffS = 0;
   } catch (err) {
-    if (ctrl.signal.aborted) return;
     state.error = err.message;
+    backoffS = err.rateLimited ? nextBackoffS(backoffS, state.refreshS) : 0;
   }
-  if (ctrl.signal.aborted) return; // superseded by a newer request
-  controller = null;
+  inFlight = false;
+  schedule(); // first, so the status can say when the next try is
   render();
-  timer = setTimeout(poll, state.refreshS * 1000);
 }
 
 function loadRefresh() {
@@ -220,10 +251,10 @@ function loadRefresh() {
   els.refresh.value = String(state.refreshS);
 }
 
-// Fetch now (paths and the open details stay); the next one comes a full interval later.
-els.refreshNow.addEventListener('click', () => poll());
+// Fetch now, or as soon as allowed (paths and the open details stay).
+els.refreshNow.addEventListener('click', () => requestPoll());
 
-// A new interval: fetch now, then keep to it.
+// A new interval: fetch as soon as allowed, then keep to it.
 els.refresh.addEventListener('change', () => {
   state.refreshS = Number(els.refresh.value);
   try {
@@ -231,13 +262,13 @@ els.refresh.addEventListener('change', () => {
   } catch {
     // Kept for this page only.
   }
-  poll();
+  requestPoll();
 });
 
 // Don't poll in a background tab; catch up as soon as it's visible again.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
-  poll();
+  requestPoll();
   refreshSlow();
 });
 
@@ -516,8 +547,9 @@ function showStatus(text, isError = false) {
 }
 
 function renderStatus() {
+  const busy = backoffS ? ` · feeds busy, next try in ${Math.max(0, Math.ceil((nextAt - Date.now()) / 1000))} s` : '';
   if (!state.data) {
-    showStatus(state.error ? `Couldn't load aircraft: ${state.error}` : 'Loading aircraft…', Boolean(state.error));
+    showStatus(state.error ? `Couldn't load aircraft: ${state.error}${busy}` : 'Loading aircraft…', Boolean(state.error));
     return;
   }
   const count = aircraftOnMap().length;
@@ -530,7 +562,7 @@ function renderStatus() {
     `updated ${ago} s ago`,
   ];
   if (state.error) parts.push(`last attempt failed: ${state.error}`);
-  showStatus(parts.join(' · '), stale || Boolean(state.error));
+  showStatus(parts.join(' · ') + busy, stale || Boolean(state.error));
 }
 
 // --- details of the selected aircraft ---------------------------------------
@@ -662,7 +694,10 @@ loadRefresh();
 renderRain();
 renderLegend();
 // A new size shows more or less of the map, so the list changes too.
-new ResizeObserver(() => render()).observe(els.canvas);
+new ResizeObserver(() => {
+  clampZoom();
+  render();
+}).observe(els.canvas);
 setInterval(renderStatus, 1000);
 // Tick just after each whole second, so the clock doesn't lag behind.
 (function tick() {
@@ -677,6 +712,7 @@ refreshSlow();
 // Old addresses carried ?lat=&lon=&range=; the map's position is in the browser now.
 if (window.location.search) history.replaceState(null, '', window.location.pathname);
 state.view = loadView();
+clampZoom();
 render();
-poll();
+requestPoll();
 loadWeather();

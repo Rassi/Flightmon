@@ -20,6 +20,13 @@ export function cornerRangeKm(rangeKm, width, height) {
   return (rangeKm * Math.hypot(width, height)) / Math.min(width, height);
 }
 
+// The furthest zoom-out (km from the middle to the nearest edge) at which the
+// feeds, which answer up to `feedKm` around a point, still reach the corners.
+export function maxRangeKm(width, height, feedKm = 463) {
+  if (!(width > 0 && height > 0)) return feedKm;
+  return Math.floor((feedKm * Math.min(width, height)) / Math.hypot(width, height));
+}
+
 // Whether an aircraft is on the visible map.
 export function onMap(view, ac) {
   const p = view.toScreen(ac.lat, ac.lon);

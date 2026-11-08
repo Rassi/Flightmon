@@ -8,7 +8,7 @@
 // 1–3). The rest are groups; --only runs just those (the full run asks the
 // flight feeds for a lot, and they answer 429 when asked too often):
 //   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
-//   home (6–8: the map remembered after a reload and in a new tab, the Home button, feed failure)
+//   home (6–9: the map remembered after a reload and in a new tab, the Home button, feed failure, back-off after a 429)
 // The main pages run with a 5 s refresh (set in their browser storage) so the
 // timing checks don't take minutes; `refresh` checks the 30 s default in a fresh profile.
 // Laptop browser only: phone widths aren't checked (user's choice, 2026-11-08).
@@ -20,7 +20,8 @@
 // Checks: list = API response, each aircraft drawn at its expected pixel
 // (Web Mercator computed independently of public/mercator.js), map tiles load,
 // distances from Copenhagen, zoom at the pointer, drag, refresh, hover
-// highlight, the map remembered in the browser, Home, feed failure, no console
+// highlight, the map remembered in the browser, Home, feed failure, back-off
+// after a 429, zoom-out cap, never two aircraft requests within 5 s, no console
 // errors; clock in Copenhagen's time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
 // exactly (checked with a synthetic tile) and the rain on/off switch. Screenshots go to the
 // given directory (default: the system temp dir); look at them too: a tile
@@ -94,7 +95,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     if (/\/api\/aircraft\?/.test(m.location().url) && /status of 502/.test(m.text())) return;
     errors.push(`${m.text()} (${m.location().url})`);
   });
-  let injecting = false; // step 9 fakes feed failures
+  let injecting = false; // steps 8 and 9 fake feed failures
+  const asked = [[]]; // times of /api/aircraft requests, one list per page load
+  page.on('request', (r) => { if (r.url().includes('/api/aircraft')) asked.at(-1).push(Date.now()); });
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) asked.push([]); });
   page.on('response', async (r) => {
     if (!r.url().includes('/api/aircraft') || r.status() !== 502 || injecting) return;
     const body = await r.json().catch(() => null);
@@ -142,7 +146,15 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     // On the map, nearest Copenhagen first (the page measures from there, wherever the map is).
     const visible = api.aircraft.filter((a) => { const p = expectedXY(a, center, range, info.w, info.h, home.lat); return p.x >= 0 && p.x <= info.w && p.y >= 0 && p.y <= info.h; })
       .map((a) => ({ ...a, homeKm: homeKm(home, a) })).sort((a, b) => a.homeKm - b.homeKm);
-    check(rows.map((r) => r.hex).join() === visible.map((a) => a.hex).join(), `${label}: list = the API's aircraft on the map (${rows.length} of ${api.aircraft.length}, same order)`);
+    const listOk = check(rows.map((r) => r.hex).join() === visible.map((a) => a.hex).join(), `${label}: list = the API's aircraft on the map (${rows.length} of ${api.aircraft.length}, same order)`);
+    if (!listOk) {
+      // Which differ, and was the answer the page drew newer than the one read here?
+      const inList = new Set(rows.map((r) => r.hex)), inApi = new Set(visible.map((a) => a.hex));
+      const edge = (hex) => { const a = api.aircraft.find((x) => x.hex === hex); if (!a) return 'not in the answer'; const p = expectedXY(a, center, range, info.w, info.h, home.lat); return `at ${p.x.toFixed(1)},${p.y.toFixed(1)} of ${info.w}×${info.h}`; };
+      console.log('     only in the list:', [...inList].filter((h) => !inApi.has(h)).map((h) => `${h} (${edge(h)})`).join(', ') || 'none');
+      console.log('     only in the answer:', [...inApi].filter((h) => !inList.has(h)).map((h) => `${h} (${edge(h)})`).join(', ') || 'none');
+      console.log('     answers seen:', apiHistory.length, '| this one is the latest:', api === apiHistory.at(-1), '| order differs only:', inList.size === inApi.size && [...inList].every((h) => inApi.has(h)));
+    }
     const dists = visible.map((a) => a.homeKm);
     check(!rows.some((r) => r.cells[0].includes('@')), `${label}: no undecoded '@' callsigns shown`);
     check(dists.every((d, i) => i === 0 || dists[i - 1] <= d), `${label}: sorted by distance`);
@@ -165,7 +177,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const near = (c) => px.some((q) => c.every((v, k) => Math.abs(v - q[k]) < 40) && q[3] > 200);
       // Where icons overlap, the one on top (fill or dark outline) may be another aircraft's.
       const neighbours = pts.filter((q, j) => j !== i && Math.hypot(q.x - p.x, q.y - p.y) < 20);
-      if (near(expectedColor(p.a)) || neighbours.some((q) => near(expectedColor(q.a))) || (neighbours.length && near(halo))) ok++; else bad.push(`${p.a.hex} (${p.a.callsign}, ground=${p.a.onGround}, ${p.a.homeKm.toFixed(1)} km from home) at ${p.x.toFixed(0)},${p.y.toFixed(0)} rgba(${px[5]})`);
+      // Zoomed out, another aircraft's label (its colour, outlined in the background colour) can lie over it.
+      const labels = pts.filter((q, j) => j !== i && p.x > q.x + 6 && p.x < q.x + 120 && Math.abs(p.y - q.y) < 9);
+      if (near(expectedColor(p.a)) || neighbours.some((q) => near(expectedColor(q.a))) || (neighbours.length && near(halo)) ||
+        labels.some((q) => near(expectedColor(q.a))) || (labels.length && near(halo))) ok++; else bad.push(`${p.a.hex} (${p.a.callsign}, ground=${p.a.onGround}, ${p.a.homeKm.toFixed(1)} km from home) at ${p.x.toFixed(0)},${p.y.toFixed(0)} rgba(${px[5]})`);
     });
     if (bad.length) { const box = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y }; }); const p = pts.find((q) => bad[0].startsWith(q.a.hex)); await page.screenshot({ path: OUT + '/miss.png', clip: { x: box.x + p.x - 30, y: box.y + p.y - 30, width: 60, height: 60 } }); }
     check(bad.length === 0, `${label}: ${ok}/${pts.length} aircraft drawn at their projected pixel` + (bad.length ? ' — off: ' + bad.join('; ') : ''));
@@ -226,7 +241,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const c0 = merc(view.center.lat, view.center.lon);
       const under = { x: c0.x + (ptr.x - rect.w / 2) / W0, y: c0.y + (ptr.y - rect.h / 2) / W0 };
       view = { center: unmerc({ x: under.x - (ptr.x - rect.w / 2) / W1, y: under.y - (ptr.y - rect.h / 2) / W1 }), range: km };
-      for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
+      for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
       const sv = await saved();
       check(savedIs(view, sv), `wheel ${dy > 0 ? 'down' : 'up'} (deltaY ${got}): map saved once scrolling stops: ${JSON.stringify(sv)} (expected ${km} km around ${view.center.lat.toFixed(4)}, ${view.center.lon.toFixed(4)})`);
       await verifyAgainstApi(`zoomed to ${km} km at the pointer`, view);
@@ -247,14 +262,26 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const c = merc(view.center.lat, view.center.lon);
       view = { center: unmerc({ x: c.x - 180 / W, y: c.y - 90 / W }), range: 50 };
       check(await page.$eval('#details', (e) => e.hidden), 'a drag selects nothing');
-      for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
+      for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
       check(savedIs(view, await saved()), 'dragged map saved');
       check(new URL(page.url()).search === '', 'nothing in the address: ' + page.url());
       await verifyAgainstApi('dragged 180, 90 px', view);
       await page.screenshot({ path: OUT + '/dragged.png' });
+
+      // Zoomed out as far as it goes: the feeds' 463 km still reach the corners.
+      const n3 = apiCalls;
+      await page.mouse.wheel(0, 8000);
+      for (let t = 0; t < 32 && apiCalls === n3; t++) await page.waitForTimeout(250);
+      const cap = Math.floor(463 * Math.min(rect.w, rect.h) / Math.hypot(rect.w, rect.h));
+      const out = await saved();
+      check(out.rangeKm === cap, `zoom-out stops at ${out.rangeKm} km to the nearest edge (expected ${cap} for a ${rect.w}×${rect.h} map)`);
+      const far = await verifyAgainstApi('zoomed out fully', { center: { lat: out.lat, lon: out.lon }, range: out.rangeKm });
+      check(far.api.center.radiusKm <= 463, `asked within the feeds' limit (${far.api.center.radiusKm} km)`);
+      await page.screenshot({ path: OUT + '/zoomed-out.png' });
+
       const n2 = apiCalls;
       await page.click('#home');
-      for (let t = 0; t < 20 && apiCalls === n2; t++) await page.waitForTimeout(250);
+      for (let t = 0; t < 32 && apiCalls === n2; t++) await page.waitForTimeout(250);
       check(savedIs(AT_HOME, await saved()), 'Home: Copenhagen at 50 km, saved');
       await verifyAgainstApi('after Home');
     }
@@ -406,8 +433,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(await page.inputValue('#refresh') === '5', 'refresh menu shows the stored 5 s');
     const n = apiCalls;
     await page.selectOption('#refresh', '10');
-    for (let t = 0; t < 10 && apiCalls === n; t++) await page.waitForTimeout(300);
-    check(apiCalls > n, 'a new interval fetches straight away');
+    for (let t = 0; t < 22 && apiCalls === n; t++) await page.waitForTimeout(300);
+    check(apiCalls > n, 'a new interval fetches as soon as allowed (within 5 s of the last request)');
     check(await page.evaluate(() => localStorage.getItem('flightmon.refresh')) === '10', 'a new interval is remembered');
     await page.selectOption('#refresh', '5');
     // The ↻ button: fetches now, keeps the selection.
@@ -417,8 +444,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await page.waitForTimeout(500);
     const n2 = apiCalls;
     await page.click('#refresh-now');
-    for (let t = 0; t < 10 && apiCalls === n2; t++) await page.waitForTimeout(300);
-    check(apiCalls > n2, '↻ fetches straight away');
+    for (let t = 0; t < 22 && apiCalls === n2; t++) await page.waitForTimeout(300);
+    check(apiCalls > n2, '↻ fetches as soon as allowed (within 5 s of the last request)');
     check(!(await page.$eval('#details', (e) => e.hidden)) && (await page.textContent('#details h2')) === sel, `↻ keeps the open details (${sel})`);
     await page.keyboard.press('Escape');
     // A fresh browser profile (no stored choice): the default.
@@ -596,7 +623,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     page.off('response', onResp);
   }
 
-  if (!want('home')) skipped('6–8', 'home'); else {
+  if (!want('home')) skipped('6–9', 'home'); else {
     console.log('6. The map is remembered: after a reload and in a new tab');
     const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
     const n = apiCalls;
@@ -604,14 +631,14 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await page.mouse.down();
     await page.mouse.move(rect.x + rect.w / 2 - 150, rect.y + rect.h / 2, { steps: 5 });
     await page.mouse.up();
-    for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
+    for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
     const sv = await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.view')));
     const moved = { center: { lat: sv.lat, lon: sv.lon }, range: sv.rangeKm };
     check(sv.lon > HOME.lon && Math.abs(sv.lat - HOME.lat) < 1e-6, `dragged east of Copenhagen and saved: ${JSON.stringify(sv)}`);
     const n2 = apiCalls;
     await page.reload();
     await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
-    for (let t = 0; t < 20 && apiCalls === n2; t++) await page.waitForTimeout(250);
+    for (let t = 0; t < 32 && apiCalls === n2; t++) await page.waitForTimeout(250);
     const r2 = await verifyAgainstApi('after a reload', moved);
     const p2 = await context.newPage();
     const req = p2.waitForRequest((r) => r.url().includes('/api/aircraft'));
@@ -623,7 +650,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     console.log('7. Home: back to Copenhagen at 50 km');
     const n3 = apiCalls;
     await page.click('#home');
-    for (let t = 0; t < 20 && apiCalls === n3; t++) await page.waitForTimeout(250);
+    for (let t = 0; t < 32 && apiCalls === n3; t++) await page.waitForTimeout(250);
     await verifyAgainstApi('after Home');
 
     console.log('8. API failure keeps the last data and says so');
@@ -634,10 +661,32 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(await page.$eval('#status', (e) => e.classList.contains('error')), 'status: ' + await page.textContent('#status'));
     check((await page.$$('#aircraft tbody tr')).length > 0 || r2.api.aircraft.length === 0, 'list still shows the last good data');
     await page.unroute('**/api/aircraft*');
+
+    console.log('9. Refused for asking too often (429): the next try waits twice the refresh interval');
+    let refusedAt = 0;
+    await page.route('**/api/aircraft*', (route) => {
+      refusedAt = Date.now();
+      route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'No flight feed answered', failures: ['adsb.lol: HTTP 429', 'adsb.fi: HTTP 429'] }) });
+    });
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('feeds busy'), null, { timeout: 15000 });
+    const busyText = await page.textContent('#status');
+    check(/feeds busy, next try in \d+ s/.test(busyText), 'status says so: ' + busyText);
+    await page.unroute('**/api/aircraft*');
+    const before = asked.at(-1).length;
+    for (let t = 0; t < 60 && asked.at(-1).length === before; t++) await page.waitForTimeout(250);
+    const waited = (asked.at(-1).at(-1) - refusedAt) / 1000;
+    check(asked.at(-1).length > before && waited >= 9.9, `next request ${waited.toFixed(1)} s after the refusal (refresh 5 s → at least 10 s)`);
+    await page.waitForFunction(() => !document.querySelector('#status').textContent.includes('feeds busy'), null, { timeout: 10000 }).catch(() => {});
+    check(!(await page.textContent('#status')).includes('failed'), 'a good answer clears it: ' + await page.textContent('#status'));
     errors.splice(errorsBefore); // the 502s injected above are expected
     injecting = false;
   }
 
+  {
+    const gaps = asked.flatMap((ts) => ts.slice(1).map((t, i) => t - ts[i]));
+    const min = gaps.length ? Math.min(...gaps) : null;
+    check(min === null || min >= 4900, `never two aircraft requests within 5 s (${gaps.length + asked.filter((ts) => ts.length).length} requests, closest ${min === null ? '–' : (min / 1000).toFixed(1) + ' s'} apart)`);
+  }
   check(errors.length === 0, 'no console errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
   await browser.close();
   const warned = warnings.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''}: ${[...new Set(warnings)].join(' | ')})` : '';
