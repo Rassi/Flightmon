@@ -9,8 +9,9 @@ import {
   climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
 } from './format.js';
 
-const REFRESH_MS = 5000;
-const STALE_MS = 20000;
+const REFRESH_CHOICES_S = [5, 10, 30, 60, 120]; // the options in index.html
+const DEFAULT_REFRESH_S = 30;
+const REFRESH_KEY = 'flightmon.refresh';
 const DEFAULT_RANGE_KM = 50;
 // Shown on a first visit, so the page isn't empty; not saved until the user picks a place.
 const DEFAULT_LOCATION = { lat: 55.6761, lon: 12.5683, rangeKm: DEFAULT_RANGE_KM }; // Copenhagen
@@ -34,6 +35,7 @@ const els = {
   clockZone: $('clock-zone'),
   clockUtc: $('clock-utc'),
   weather: $('weather'),
+  refresh: $('refresh'),
   rainToggle: $('rain-toggle'),
   rainStatus: $('rain-status'),
   legend: $('legend'),
@@ -47,6 +49,7 @@ const state = {
   location: null, // { lat, lon, rangeKm }
   data: null, // last good /api/aircraft response
   lastOk: 0,
+  refreshS: DEFAULT_REFRESH_S, // seconds between aircraft requests
   error: null,
   highlight: null, // hex of the aircraft under the pointer in the list
   selected: null, // the clicked aircraft, as last seen; its details are shown
@@ -181,8 +184,30 @@ async function poll() {
   if (ctrl.signal.aborted) return; // superseded by a newer location
   controller = null;
   render();
-  timer = setTimeout(poll, REFRESH_MS);
+  timer = setTimeout(poll, state.refreshS * 1000);
 }
+
+function loadRefresh() {
+  let saved = null;
+  try {
+    saved = Number(localStorage.getItem(REFRESH_KEY));
+  } catch {
+    // Default below.
+  }
+  state.refreshS = REFRESH_CHOICES_S.includes(saved) ? saved : DEFAULT_REFRESH_S;
+  els.refresh.value = String(state.refreshS);
+}
+
+// A new interval: fetch now, then keep to it.
+els.refresh.addEventListener('change', () => {
+  state.refreshS = Number(els.refresh.value);
+  try {
+    localStorage.setItem(REFRESH_KEY, String(state.refreshS));
+  } catch {
+    // Kept for this page only.
+  }
+  poll();
+});
 
 // Don't poll in a background tab; catch up as soon as it's visible again.
 document.addEventListener('visibilitychange', () => {
@@ -477,7 +502,8 @@ function renderStatus() {
   }
   const count = aircraftInRange().length;
   const ago = Math.max(0, Math.round((Date.now() - state.lastOk) / 1000));
-  const stale = Date.now() - state.lastOk > STALE_MS;
+  // Stale when two refreshes have been missed (20 s at 5 s, 70 s at 30 s).
+  const stale = Date.now() - state.lastOk > (2 * state.refreshS + 10) * 1000;
   const parts = [
     `${count} aircraft within ${state.location.rangeKm} km`,
     `from ${state.data.source}`,
@@ -607,6 +633,7 @@ try {
 } catch {
   // On by default.
 }
+loadRefresh();
 renderRain();
 renderLegend();
 new ResizeObserver(drawCanvas).observe(els.canvas);

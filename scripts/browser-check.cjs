@@ -9,6 +9,8 @@
 // flight feeds for a lot, and they answer 429 when asked too often):
 //   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
 //   location (6–9: use my location, reload, invalid input, feed failure), phone (10)
+// The main pages run with a 5 s refresh (set in their browser storage) so the
+// timing checks don't take minutes; the phone page checks the 30 s default.
 // A 502 from /api/aircraft because every feed answered 429 is a warning, not a
 // failure: the feeds refused, the page is fine (step 9 checks it copes).
 //
@@ -58,6 +60,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   const browser = await chromium.launch({ proxy });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2,
     geolocation: { latitude: 55.618, longitude: 12.656 }, permissions: ['geolocation'] });
+  // 5 s refresh for this run unless a step chose another (the page's default is 30 s).
+  await context.addInitScript(() => { if (!localStorage.getItem('flightmon.refresh')) localStorage.setItem('flightmon.refresh', '5'); });
   const page = await context.newPage();
   const errors = [];
   page.on('console', (m) => {
@@ -325,6 +329,13 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const before = apiCalls; await page.waitForTimeout(11000);
     check(apiCalls - before >= 2 && apiCalls - before <= 3, `${apiCalls - before} refreshes in 11 s`);
     await verifyAgainstApi('after refresh');
+    check(await page.inputValue('#refresh') === '5', 'refresh menu shows the stored 5 s');
+    const n = apiCalls;
+    await page.selectOption('#refresh', '10');
+    for (let t = 0; t < 10 && apiCalls === n; t++) await page.waitForTimeout(300);
+    check(apiCalls > n, 'a new interval fetches straight away');
+    check(await page.evaluate(() => localStorage.getItem('flightmon.refresh')) === '10', 'a new interval is remembered');
+    await page.selectOption('#refresh', '5');
   }
   await page.screenshot({ path: OUT + '/radar-1440.png' });
 
@@ -542,6 +553,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(overlaps.length === 0, 'legend and attribution below the radar' + (overlaps.length ? ': overlapping ' + overlaps.join(', ') : ''));
     const sq = await phone.$eval('#radar', (c) => [c.clientWidth, c.clientHeight]);
     check(sq[0] === sq[1], `radar is square on a phone: ${sq.join('×')}`);
+    // A fresh browser: the default refresh.
+    check(await phone.inputValue('#refresh') === '30', 'refresh is 30 s by default');
     await phone.screenshot({ path: OUT + '/radar-390.png', fullPage: true });
   }
 

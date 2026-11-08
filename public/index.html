@@ -18,6 +18,15 @@
       <button type="submit">Show</button>
       <button type="button" id="locate">Use my location</button>
     </form>
+    <label title="How often to ask for aircraft positions">Refresh
+      <select id="refresh">
+        <option value="5">5 s</option>
+        <option value="10">10 s</option>
+        <option value="30">30 s</option>
+        <option value="60">1 min</option>
+        <option value="120">2 min</option>
+      </select>
+    </label>
     <div class="now">
       <p class="clock" title="Time at the radar's location"><span id="clock-time" class="clock-time"></span> <span id="clock-zone" class="muted"></span> <span id="clock-utc" class="muted"></span></p>
       <p id="weather" class="weather" aria-live="polite"></p>
