@@ -13,7 +13,10 @@ Date each entry.
   own branch. No feature branches or pull requests unless asked for.
 - Run `npm test` before pushing. For page changes, also run the browser
   check against `npm run dev` and look at its screenshots:
-  `NODE_PATH=$(npm root -g) node scripts/browser-check.cjs <dir>`.
+  `NODE_PATH=$(npm root -g) node scripts/browser-check.cjs <dir> --only=<groups>`.
+  Run only the groups the change touches (list at the top of the script);
+  the full run asks the flight feeds so much that they answer 429. Keep
+  manual requests to the feeds (curl etc.) to a few, too.
 
 ## Deploying
 

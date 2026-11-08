@@ -2,7 +2,15 @@
 // Worker and live data, and compares what is drawn with what the API returned.
 //
 //   npm run dev                                   # in another terminal
-//   NODE_PATH=$(npm root -g) node scripts/browser-check.cjs [screenshot-dir]
+//   NODE_PATH=$(npm root -g) node scripts/browser-check.cjs [screenshot-dir] [--only=group,group]
+//
+// Every run loads the page and checks the list and radar against the API (steps
+// 1–3). The rest are groups; --only runs just those (the full run asks the
+// flight feeds for a lot, and they answer 429 when asked too often):
+//   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
+//   location (6–9: use my location, reload, invalid input, feed failure), phone (10)
+// A 502 from /api/aircraft because every feed answered 429 is a warning, not a
+// failure: the feeds refused, the page is fine (step 9 checks it copes).
 //
 // Needs Playwright with Chromium (pre-installed in Claude's cloud container;
 // elsewhere `npm i -g playwright && npx playwright install chromium`).
@@ -18,7 +26,19 @@
 const os = require('node:os');
 const { chromium } = require('playwright');
 const BASE = process.env.FLIGHTMON_URL || 'http://127.0.0.1:8787';
-const OUT = process.argv[2] || os.tmpdir();
+const args = process.argv.slice(2);
+const OUT = args.find((a) => !a.startsWith('--')) || os.tmpdir();
+const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'location', 'phone'];
+const onlyArg = args.find((a) => a.startsWith('--only='));
+const only = onlyArg ? onlyArg.slice('--only='.length).split(',').filter(Boolean) : null;
+if (only?.some((g) => !GROUPS.includes(g))) {
+  console.error(`Unknown group in ${onlyArg}; groups: ${GROUPS.join(', ')}`);
+  process.exit(2);
+}
+const want = (group) => !only || only.includes(group);
+const skipped = (step, group) => console.log(`${step} (${group}): skipped`);
+const warnings = [];
+const warn = (msg) => { console.log('  !', msg); warnings.push(msg); };
 const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 let failures = 0;
 // Expected screen position, Web Mercator (textbook asinh form, independent of public/mercator.js).
@@ -49,7 +69,17 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     if (/\/api\/track\?/.test(m.location().url) && /status of (404|429|502)/.test(m.text())) return;
     // Open-Meteo's 429 (daily limit; this container shares its IP) is shown on the page.
     if (/api\.open-meteo\.com/.test(m.location().url) && /status of 429/.test(m.text())) return;
+    // /api/aircraft's 502s are judged by their body below (feeds' 429 → warning).
+    if (/\/api\/aircraft\?/.test(m.location().url) && /status of 502/.test(m.text())) return;
     errors.push(`${m.text()} (${m.location().url})`);
+  });
+  let injecting = false; // step 9 fakes feed failures
+  page.on('response', async (r) => {
+    if (!r.url().includes('/api/aircraft') || r.status() !== 502 || injecting) return;
+    const body = await r.json().catch(() => null);
+    const fails = body?.failures ?? [];
+    if (fails.length && fails.every((f) => /HTTP 429/.test(f))) warn(`the feeds refused (rate limit): ${fails.join('; ')}`);
+    else errors.push(`/api/aircraft answered 502: ${JSON.stringify(body)}`);
   });
   page.on('pageerror', (e) => errors.push(String(e)));
   let lastApi = null; let apiCalls = 0;
@@ -123,35 +153,40 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   const { api, rows } = await verifyAgainstApi('first load');
   console.log('   source:', api.source, '| first rows:'); rows.slice(0, 4).forEach((r) => console.log('    ', r.cells.join(' | ')));
 
-  console.log('3b. Map tiles');
-  await page.waitForTimeout(1500);
-  check(tiles.ok > 0 && tiles.bad.length === 0, `${tiles.ok} Esri tiles loaded, ${tiles.bad.length} failed` + (tiles.bad.length ? ': ' + tiles.bad.slice(0, 3).join('; ') : ''));
-  const mapStats = await page.evaluate(() => {
-    const c = document.getElementById('radar'); const ctx = c.getContext('2d');
-    // A ring of samples a third of the way out: the map should vary, not be one flat colour.
-    const vals = []; const cx = c.width / 2, cy = c.height / 2, r = Math.min(c.width, c.height) / 6;
-    for (let i = 0; i < 360; i += 3) { const d = ctx.getImageData(Math.round(cx + r * Math.sin(i * Math.PI / 180)), Math.round(cy - r * Math.cos(i * Math.PI / 180)), 1, 1).data; vals.push(d[0] + d[1] + d[2]); }
-    const mean = vals.reduce((a, b) => a + b) / vals.length; const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
-    return { mean: Math.round(mean), sd: Math.round(sd), distinct: new Set(vals).size };
-  });
-  check(mapStats.distinct > 10 && mapStats.sd > 5, `map drawn under the radar (brightness mean ${mapStats.mean}, sd ${mapStats.sd}, ${mapStats.distinct} distinct values)`);
-  check((await page.textContent('#attribution')).startsWith('Map: Esri'), 'Esri attribution shown');
-  const legend = await page.$eval('#legend', (e) => ({ text: e.textContent, bg: e.querySelector('.legend-bar').style.backgroundImage }));
-  check(legend.bg.startsWith('linear-gradient') && legend.text.includes('12 km') && legend.text.includes('Ground'), 'altitude legend shown: ' + legend.text);
-  const swatches = await page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => [tr.dataset.hex, getComputedStyle(tr.querySelector('.swatch')).backgroundColor]));
-  const rgb = (h) => `rgb(${hexToRgb(h).join(', ')})`;
-  const swatchBad = swatches.filter(([hex, c]) => { const a = lastApi.aircraft.find((x) => x.hex === hex); return a && !a.emergency && c !== rgb(altitudeColor(a)); });
-  check(swatches.length > 0 && swatchBad.length === 0, `list swatches match the radar colours (${swatches.length})`);
+  // The location's time zone, from Open-Meteo's answer (weather and rain need it).
+  await page.waitForFunction(() => !/Loading/.test(document.querySelector('#weather').textContent), null, { timeout: 15000 }).catch(() => {});
+  const lastWeather = weatherResps.at(-1);
+  const weatherJson = lastWeather ? await lastWeather.json : null;
+  const liveTz = lastWeather?.status === 200 && weatherJson?.current ? weatherJson.timezone : null;
 
-  console.log('3c. Clock and weather');
-  let liveTz = null; // the time zone the page learnt from Open-Meteo, if it answered
-  {
-    await page.waitForFunction(() => !/Loading/.test(document.querySelector('#weather').textContent), null, { timeout: 15000 }).catch(() => {});
-    const last = weatherResps.at(-1);
-    const w = last ? await last.json : null;
+  if (!want('map')) skipped('3b', 'map'); else {
+    console.log('3b. Map tiles');
+    await page.waitForTimeout(1500);
+    check(tiles.ok > 0 && tiles.bad.length === 0, `${tiles.ok} Esri tiles loaded, ${tiles.bad.length} failed` + (tiles.bad.length ? ': ' + tiles.bad.slice(0, 3).join('; ') : ''));
+    const mapStats = await page.evaluate(() => {
+      const c = document.getElementById('radar'); const ctx = c.getContext('2d');
+      // A ring of samples a third of the way out: the map should vary, not be one flat colour.
+      const vals = []; const cx = c.width / 2, cy = c.height / 2, r = Math.min(c.width, c.height) / 6;
+      for (let i = 0; i < 360; i += 3) { const d = ctx.getImageData(Math.round(cx + r * Math.sin(i * Math.PI / 180)), Math.round(cy - r * Math.cos(i * Math.PI / 180)), 1, 1).data; vals.push(d[0] + d[1] + d[2]); }
+      const mean = vals.reduce((a, b) => a + b) / vals.length; const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+      return { mean: Math.round(mean), sd: Math.round(sd), distinct: new Set(vals).size };
+    });
+    check(mapStats.distinct > 10 && mapStats.sd > 5, `map drawn under the radar (brightness mean ${mapStats.mean}, sd ${mapStats.sd}, ${mapStats.distinct} distinct values)`);
+    check((await page.textContent('#attribution')).startsWith('Map: Esri'), 'Esri attribution shown');
+    const legend = await page.$eval('#legend', (e) => ({ text: e.textContent, bg: e.querySelector('.legend-bar').style.backgroundImage }));
+    check(legend.bg.startsWith('linear-gradient') && legend.text.includes('12 km') && legend.text.includes('Ground'), 'altitude legend shown: ' + legend.text);
+    const swatches = await page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => [tr.dataset.hex, getComputedStyle(tr.querySelector('.swatch')).backgroundColor]));
+    const rgb = (h) => `rgb(${hexToRgb(h).join(', ')})`;
+    const swatchBad = swatches.filter(([hex, c]) => { const a = lastApi.aircraft.find((x) => x.hex === hex); return a && !a.emergency && c !== rgb(altitudeColor(a)); });
+    check(swatches.length > 0 && swatchBad.length === 0, `list swatches match the radar colours (${swatches.length})`);
+  }
+
+  if (!want('weather')) skipped('3c', 'weather'); else {
+    console.log('3c. Clock and weather');
+    const last = lastWeather;
+    const w = weatherJson;
     const text = await page.textContent('#weather');
-    if (last?.status === 200 && w?.current) {
-      liveTz = w.timezone;
+    if (liveTz) {
       const c = w.current;
       const want = [`${Math.round(c.temperature_2m)} °C`, `${Math.round(c.wind_speed_10m)} km/h`, `${Math.round(c.pressure_msl)} hPa`];
       check(want.every((t) => text.includes(t)), `live weather shown as Open-Meteo gave it: "${text}"`);
@@ -174,8 +209,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check((await read())[0] !== t1, 'clock ticks');
   }
 
-  console.log('3d. Rain radar (RainViewer)');
-  {
+  if (!want('rain')) skipped('3d', 'rain'); else {
+    console.log('3d. Rain radar (RainViewer)');
     await page.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(1500);
     const list = rainLists.length ? await rainLists[rainLists.length - 1].json : null;
@@ -285,28 +320,32 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     // Leave the setting as found for the rest of the run (on).
   }
 
-  console.log('4. Refresh every 5 s');
-  const before = apiCalls; await page.waitForTimeout(11000);
-  check(apiCalls - before >= 2 && apiCalls - before <= 3, `${apiCalls - before} refreshes in 11 s`);
-  await verifyAgainstApi('after refresh');
+  if (!want('refresh')) skipped('4', 'refresh'); else {
+    console.log('4. Refresh every 5 s');
+    const before = apiCalls; await page.waitForTimeout(11000);
+    check(apiCalls - before >= 2 && apiCalls - before <= 3, `${apiCalls - before} refreshes in 11 s`);
+    await verifyAgainstApi('after refresh');
+  }
   await page.screenshot({ path: OUT + '/radar-1440.png' });
 
-  console.log('5. Hover a list row highlights its plane');
-  const firstAir = lastApi.aircraft.find((a) => !a.onGround) || lastApi.aircraft[0];
-  await page.hover(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`);
-  const dims = await page.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
-  const hxy = expectedXY(firstAir, { lat: 55.6761, lon: 12.5683 }, 50, dims.w, dims.h);
-  const hl = await page.evaluate(({ x, y }) => {
-    const c = document.getElementById('radar'); const dpr = devicePixelRatio;
-    return Array.from(c.getContext('2d').getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data);
-  }, hxy);
-  check(hl[0] > 230 && hl[1] > 230 && hl[2] > 230, `${firstAir.callsign || firstAir.hex} drawn in the highlight colour (white): rgba(${hl})`);
-  check(await page.$eval(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`, (tr) => tr.classList.contains('highlight')), 'row highlighted');
-  await page.screenshot({ path: OUT + '/radar-hover.png' });
-  await page.mouse.move(5, 5);
+  if (!want('hover')) skipped('5', 'hover'); else {
+    console.log('5. Hover a list row highlights its plane');
+    const firstAir = lastApi.aircraft.find((a) => !a.onGround) || lastApi.aircraft[0];
+    await page.hover(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`);
+    const dims = await page.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
+    const hxy = expectedXY(firstAir, { lat: 55.6761, lon: 12.5683 }, 50, dims.w, dims.h);
+    const hl = await page.evaluate(({ x, y }) => {
+      const c = document.getElementById('radar'); const dpr = devicePixelRatio;
+      return Array.from(c.getContext('2d').getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data);
+    }, hxy);
+    check(hl[0] > 230 && hl[1] > 230 && hl[2] > 230, `${firstAir.callsign || firstAir.hex} drawn in the highlight colour (white): rgba(${hl})`);
+    check(await page.$eval(`#aircraft tbody tr[data-hex="${firstAir.hex}"]`, (tr) => tr.classList.contains('highlight')), 'row highlighted');
+    await page.screenshot({ path: OUT + '/radar-hover.png' });
+    await page.mouse.move(5, 5);
+  }
 
-  console.log('5b. Click a plane for details (route from adsbdb)');
-  {
+  if (!want('details')) skipped('5b', 'details'); else {
+    console.log('5b. Click a plane for details (route from adsbdb)');
     const adsbdb = [];
     // Record responses as they arrive (bodies are read later, so none is missed).
     const tracks = [];
@@ -452,56 +491,64 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     page.off('response', onResp);
   }
 
-  console.log('6. Use my location (geolocation mocked to CPH airport 55.618, 12.656)');
-  await page.fill('#range', '20');
-  await page.click('#locate');
-  await page.waitForFunction(() => location.search.includes('lat=55.618'));
-  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('within 20 km'));
-  check(page.url().includes('lat=55.618&lon=12.656&range=20'), 'URL: ' + page.url());
-  const r2 = await verifyAgainstApi('airport, 20 km');
-  check(r2.api.center.radiusKm === 20 && r2.api.aircraft.every((a) => a.distKm <= 20), 'all within 20 km');
+  if (!want('location')) skipped('6–9', 'location'); else {
+    console.log('6. Use my location (geolocation mocked to CPH airport 55.618, 12.656)');
+    await page.fill('#range', '20');
+    await page.click('#locate');
+    await page.waitForFunction(() => location.search.includes('lat=55.618'));
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('within 20 km'));
+    check(page.url().includes('lat=55.618&lon=12.656&range=20'), 'URL: ' + page.url());
+    const r2 = await verifyAgainstApi('airport, 20 km');
+    check(r2.api.center.radiusKm === 20 && r2.api.aircraft.every((a) => a.distKm <= 20), 'all within 20 km');
 
-  console.log('7. Reload: location comes back from the URL; new tab without params: from localStorage');
-  await page.reload(); await page.waitForFunction(() => document.querySelector('#status').textContent.includes('within 20 km'));
-  check(true, 'reload keeps location');
-  const p2 = await context.newPage(); await p2.goto(BASE + '/');
-  await p2.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
-  check(await p2.inputValue('#lat') === '55.618', 'new tab restored from localStorage');
-  await p2.close();
+    console.log('7. Reload: location comes back from the URL; new tab without params: from localStorage');
+    await page.reload(); await page.waitForFunction(() => document.querySelector('#status').textContent.includes('within 20 km'));
+    check(true, 'reload keeps location');
+    const p2 = await context.newPage(); await p2.goto(BASE + '/');
+    await p2.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
+    check(await p2.inputValue('#lat') === '55.618', 'new tab restored from localStorage');
+    await p2.close();
 
-  console.log('8. Invalid input');
-  await page.fill('#lat', '123'); await page.click('button[type=submit]');
-  check((await page.textContent('#status')).includes('Latitude must be'), 'error shown: ' + await page.textContent('#status'));
-  check(page.url().includes('lat=55.618'), 'location unchanged');
+    console.log('8. Invalid input');
+    await page.fill('#lat', '123'); await page.click('button[type=submit]');
+    check((await page.textContent('#status')).includes('Latitude must be'), 'error shown: ' + await page.textContent('#status'));
+    check(page.url().includes('lat=55.618'), 'location unchanged');
 
-  console.log('9. API failure keeps the last data and says so');
-  const errorsBefore = errors.length;
-  await page.route('**/api/aircraft*', (route) => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'No flight feed answered', failures: ['adsb.lol: HTTP 503', 'adsb.fi: HTTP 503'] }) }));
-  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('failed'), null, { timeout: 12000 });
-  check(await page.$eval('#status', (e) => e.classList.contains('error')), 'status: ' + await page.textContent('#status'));
-  check((await page.$$('#aircraft tbody tr')).length > 0 || r2.api.aircraft.length === 0, 'list still shows the last good data');
-  await page.unroute('**/api/aircraft*');
-  errors.splice(errorsBefore); // the 502s injected above are expected
+    console.log('9. API failure keeps the last data and says so');
+    const errorsBefore = errors.length;
+    injecting = true;
+    await page.route('**/api/aircraft*', (route) => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'No flight feed answered', failures: ['adsb.lol: HTTP 503', 'adsb.fi: HTTP 503'] }) }));
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('failed'), null, { timeout: 12000 });
+    check(await page.$eval('#status', (e) => e.classList.contains('error')), 'status: ' + await page.textContent('#status'));
+    check((await page.$$('#aircraft tbody tr')).length > 0 || r2.api.aircraft.length === 0, 'list still shows the last good data');
+    await page.unroute('**/api/aircraft*');
+    errors.splice(errorsBefore); // the 502s injected above are expected
+    injecting = false;
+  }
 
-  console.log('10. Phone width (390 px)');
-  const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
-  await phone.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
-  await phone.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
-  const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  check(overflow <= 0, `no horizontal page scroll (overflow ${overflow}px)`);
-  const gap = await phone.evaluate(() => document.getElementById('status').getBoundingClientRect().top - document.getElementById('radar').getBoundingClientRect().bottom);
-  check(gap >= 0, `status line starts below the radar (gap ${gap}px)`);
-  const overlaps = await phone.evaluate(() => {
-    const r = document.getElementById('radar').getBoundingClientRect();
-    return ['legend', 'attribution'].filter((id) => document.getElementById(id).getBoundingClientRect().top < r.bottom - 1);
-  });
-  check(overlaps.length === 0, 'legend and attribution below the radar' + (overlaps.length ? ': overlapping ' + overlaps.join(', ') : ''));
-  const sq = await phone.$eval('#radar', (c) => [c.clientWidth, c.clientHeight]);
-  check(sq[0] === sq[1], `radar is square on a phone: ${sq.join('×')}`);
-  await phone.screenshot({ path: OUT + '/radar-390.png', fullPage: true });
+  if (!want('phone')) skipped('10', 'phone'); else {
+    console.log('10. Phone width (390 px)');
+    const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    await phone.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
+    await phone.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft within'));
+    const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    check(overflow <= 0, `no horizontal page scroll (overflow ${overflow}px)`);
+    const gap = await phone.evaluate(() => document.getElementById('status').getBoundingClientRect().top - document.getElementById('radar').getBoundingClientRect().bottom);
+    check(gap >= 0, `status line starts below the radar (gap ${gap}px)`);
+    const overlaps = await phone.evaluate(() => {
+      const r = document.getElementById('radar').getBoundingClientRect();
+      return ['legend', 'attribution'].filter((id) => document.getElementById(id).getBoundingClientRect().top < r.bottom - 1);
+    });
+    check(overlaps.length === 0, 'legend and attribution below the radar' + (overlaps.length ? ': overlapping ' + overlaps.join(', ') : ''));
+    const sq = await phone.$eval('#radar', (c) => [c.clientWidth, c.clientHeight]);
+    check(sq[0] === sq[1], `radar is square on a phone: ${sq.join('×')}`);
+    await phone.screenshot({ path: OUT + '/radar-390.png', fullPage: true });
+  }
 
   check(errors.length === 0, 'no console errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
   await browser.close();
-  console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
+  const warned = warnings.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''}: ${[...new Set(warnings)].join(' | ')})` : '';
+  const ran = only ? ` [core + ${only.join(', ')}]` : '';
+  console.log((failures ? `\n${failures} FAILED` : '\nALL PASSED') + ran + warned);
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });
