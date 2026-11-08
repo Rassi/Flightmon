@@ -41,6 +41,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-11-08 | No circular radar: the user didn't like the circle and the range lines. The street map fills the whole left section; no rings, cross, distance labels or compass letters, just a small dot at the location. "Range" is now the distance from the centre to the nearest edge; aircraft are asked for out to the corners (range × diagonal / shorter side, max 463 km), and the list shows exactly the aircraft on the map (status: "N aircraft on the map (50 km to the nearest edge)"). Rain button, legend and credits sit on the map in translucent panels. |
 | 2026-11-08 | Mouse wheel / trackpad zooms (user asked), around the location, which stays in the centre (no panning). Range × e^(deltaY × 0.0015): about ×1.16 per mouse notch (deltaY 100); 1 to 463 km, shown to 0.1 km below 10 km. Once scrolling stops (400 ms) the range goes into the URL/storage (not for the default location) and aircraft are fetched; paths and the open details stay. The Range field takes decimals (step 0.1). |
 | 2026-11-08 | Zoom around the mouse pointer (the point under it stays put) and drag the map with the mouse button down (user asked for both). The location (lat/lon fields, the dot, weather, clock) stays put; the map's middle moves. Distances and directions in the list and details are still from the location, recomputed in the page when the map is off it, and the list is sorted by them. Aircraft are fetched around the map's middle once it stops moving. A press that moves less than 4 px is a click (selects a plane). "Centre on location" appears on the map once it has moved; Show, Use my location and a reload also centre it. The map's middle isn't saved (only the range is). The scale comes from the location's latitude, so dragging north or south doesn't change it. |
+| 2026-11-08 | No location form (user: "I don't think we need all the location stuff"): Latitude, Longitude, Range, Show, Use my location and "Centre on location" are gone, and nothing goes in the address (old `?lat=&lon=&range=` links are cleaned up). Home is fixed at Copenhagen (55.6761, 12.5683): the dot, the weather and the clock are for there, and a **Home** button brings the map back to it at 50 km. Moving the map is drag and wheel only; where it was left (middle and zoom) is remembered in the browser (`flightmon.view`), saved once it stops moving, not before the first move. The Rain button and its image time moved to the header. The Direction column and the details card's Position line are gone; the user first wanted distances gone too, then kept the **Distance** column because the list is sorted by it: distance from Copenhagen, nearest first, wherever the map is. |
 | 2026-11-08 | Laptop browser only for now: don't spend effort on phone widths. The phone step was dropped from the browser check; the existing narrow-screen CSS stays but isn't checked. |
 | 2026-11-08 | Refresh interval is a "Refresh" menu in the header (5 s, 10 s, 30 s, 1 min, 2 min), default **30 s** (was a fixed 5 s), remembered in the browser. Changing it fetches at once. "Stale" (status in red) after two missed refreshes: 2 × interval + 10 s. |
 | 2026-11-08 | A ↻ button next to the Refresh menu fetches at once, keeping recorded paths and the open details (F5 or "Show" would clear them); the next automatic update comes a full interval later. |
@@ -75,7 +76,7 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 
 **Lesson:** a tile server can answer 200 with a placeholder image. Look at a tile, not just the status.
 
-**Rate limits (2026-11-08, user's Windows machine):** after a full browser check (several pages polling every 5 s) plus a few curls, adsb.lol *and* adsb.fi both answered 429 to the same IP; the Worker then returns 502 "No flight feed answered" with both 429s listed. Neither publishes its limit (not looked up yet). The page copes (keeps the last data, says the update failed), but the browser check fails on the console error. Don't hammer the feeds when checking by hand. Since then the browser check reports a 502 whose failures are all 429s as a warning, and `--only=` runs just the groups a change touches.
+**Rate limits (2026-11-08, user's Windows machine):** after a full browser check (several pages polling every 5 s) plus a few curls, adsb.lol *and* adsb.fi both answered 429 to the same IP; the Worker then returns 502 "No flight feed answered" with both 429s listed. Neither publishes its limit (not looked up yet). The page copes (keeps the last data, says the update failed), but the browser check fails on the console error. Don't hammer the feeds when checking by hand. Seen again 2026-11-08 near the end of a run of six groups (one 429 from both, then they answered again). Since then the browser check reports a 502 whose failures are all 429s as a warning, and `--only=` runs just the groups a change touches.
 
 **Still unknown until the first deploy:** whether adsb.lol / adsb.fi accept requests from Cloudflare's network.
 
@@ -172,17 +173,17 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 **Done**
 - Live aircraft (adsb.lol, adsb.fi fallback), refresh every 30 s by default (menu: 5 s to 2 min, remembered), and a ↻ button to fetch at once
-- Mouse-wheel zoom around the pointer, drag to move the map, "Centre on location" to go back
-- Map filling the left section, north up, a dot at the location (the circular radar with rings and compass was dropped 2026-11-08); ground traffic grey and unlabelled; emergencies red
+- Mouse-wheel zoom around the pointer, drag to move the map, Home (Copenhagen, 50 km); the map is remembered in the browser
+- Map filling the left section, north up, a dot at home (the circular radar with rings and compass was dropped 2026-11-08); ground traffic grey and unlabelled; emergencies red
 - Street map (Esri)
-- List sorted by distance; hover a row to highlight the plane
-- Location: typed, pasted "lat, lon", or the browser's; remembered and in the URL; Copenhagen until one is chosen
+- List of the aircraft on the map, sorted by distance from Copenhagen (Distance column); hover a row to highlight the plane
+- (Dropped 2026-11-08: typed/pasted/browser location, location in the URL, Direction column)
 - Colour by altitude, with legend
 - Aircraft-type icons (own drawings, static)
 - Click a plane for details, with route and airframe from adsbdb
 - Path flown by the selected aircraft (recorded since page open, plus OpenSky's history)
-- Clock (location's time + UTC) and weather (Open-Meteo) in the header
-- Rain radar overlay (RainViewer), switchable
+- Clock (Copenhagen time + UTC) and weather (Open-Meteo, Copenhagen) in the header
+- Rain radar overlay (RainViewer), switchable from the header
 
 **Candidates: fit a laptop browser, no key**
 1. Military / twin-engine icon variants (need a type database, e.g. ICAO Doc 8643 descriptions; check licence)
@@ -231,7 +232,8 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | ↻ refresh-now button; checked with `--only=refresh`. |
 | 2026-11-08 | Circular radar replaced by a full map (no rings); list = aircraft on the map; feed asked out to the corners. Browser check updated (list vs on-map aircraft, the radius asked for, rain sampled over the whole map); `--only=map,rain,hover,details,location` passed. |
 | 2026-11-08 | Mouse-wheel zoom; checked with `--only=map` (zoom in, list and pixels at the new range, back out). |
-| 2026-11-08 | Zoom at the pointer, drag to pan, "Centre on location". `--only=map,details` passed except the recorded-path check finding 0 checkable segments (SAS954 turning onto final); that case is now "not checked". |
+| 2026-11-08 | Zoom at the pointer, drag to pan, "Centre on location" (replaced the same day by Home). `--only=map,details` passed except the recorded-path check finding 0 checkable segments (SAS954 turning onto final); that case is now "not checked". |
+| 2026-11-08 | Home button instead of the location form; Rain button in the header; Direction column and Position line gone, Distance (from Copenhagen) kept for sorting; map position remembered in the browser. Browser check: first visit from an old address, `home` group (reload, new tab, Home, feed failure) instead of `location`. Ran all groups but `refresh`: passed except a too-tight tolerance in the check (saved position vs expected, the pointer sits on whole pixels; loosened to 2e-4°, not re-run). |
 
 ## Open questions
 

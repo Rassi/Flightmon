@@ -5,19 +5,20 @@ import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { cornerRangeKm, drawMap, hitTest, mapView, onMap } from './radar.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
-import { bearingDeg, distanceKm } from './geo.js';
+import { distanceKm } from './geo.js';
 import {
-  climbArrow, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed,
+  climbArrow, displayName, formatAltitude, formatDistance, formatSpeed,
 } from './format.js';
 
 const REFRESH_CHOICES_S = [5, 10, 30, 60, 120]; // the options in index.html
 const DEFAULT_REFRESH_S = 30;
 const REFRESH_KEY = 'flightmon.refresh';
-const DEFAULT_RANGE_KM = 50;
-// Shown on a first visit, so the page isn't empty; not saved until the user picks a place.
-const DEFAULT_LOCATION = { lat: 55.6761, lon: 12.5683, rangeKm: DEFAULT_RANGE_KM }; // Copenhagen
-const MAX_RANGE_KM = 463;
-const STORAGE_KEY = 'flightmon.location';
+// Home: Copenhagen. The dot on the map, the weather and the clock are for here;
+// the Home button brings the map back to it at the default zoom.
+const HOME = { lat: 55.6761, lon: 12.5683 };
+const DEFAULT_RANGE_KM = 50; // from the map's middle to its nearest edge
+const MAX_RANGE_KM = 463; // the feeds' limit
+const VIEW_KEY = 'flightmon.view'; // where the map was left: { lat, lon, rangeKm }
 const RAIN_KEY = 'flightmon.rain';
 const WEATHER_REFRESH_MS = 15 * 60 * 1000; // Open-Meteo's current values change every 15 min
 const RAIN_REFRESH_MS = 5 * 60 * 1000; // a new radar image every 10 min
@@ -25,11 +26,7 @@ const RAIN_STALE_S = 30 * 60;
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  form: $('location-form'),
-  lat: $('lat'),
-  lon: $('lon'),
-  range: $('range'),
-  locate: $('locate'),
+  home: $('home'),
   canvas: $('radar'),
   attribution: $('attribution'),
   clockTime: $('clock-time'),
@@ -39,7 +36,6 @@ const els = {
   refresh: $('refresh'),
   refreshNow: $('refresh-now'),
   rainToggle: $('rain-toggle'),
-  recenter: $('recenter'),
   rainStatus: $('rain-status'),
   legend: $('legend'),
   details: $('details'),
@@ -49,18 +45,16 @@ const els = {
 };
 
 const state = {
-  location: null, // { lat, lon, rangeKm }
+  view: { ...HOME, rangeKm: DEFAULT_RANGE_KM }, // the map's middle and zoom
   data: null, // last good /api/aircraft response
   lastOk: 0,
-  locationSaved: false, // false while showing the default location
-  viewCenter: null, // the map's middle once dragged or zoomed off the location; null = the location
   refreshS: DEFAULT_REFRESH_S, // seconds between aircraft requests
   error: null,
   highlight: null, // hex of the aircraft under the pointer in the list
   selected: null, // the clicked aircraft, as last seen; its details are shown
   info: undefined, // adsbdb lookup for the selected aircraft (undefined while loading)
   track: undefined, // its path from OpenSky: { path } or { error } (undefined while loading)
-  weather: null, // Open-Meteo's current weather at the location (see weather.js)
+  weather: null, // Open-Meteo's current weather at home (see weather.js)
   weatherError: null,
   weatherAt: 0, // when it was last asked for
   rainOn: true,
@@ -73,106 +67,73 @@ const trails = new TrailRecorder(); // every aircraft's positions since the page
 
 let lastView = null; // the radar's projection as last drawn, for clicks
 
-// --- location ---------------------------------------------------------------
+// --- the map: home, wheel to zoom, drag to move ---------------------------------
 
-function parseLocation(lat, lon, range) {
-  const loc = { lat: Number(lat), lon: Number(lon), rangeKm: Number(range) };
-  if (!Number.isFinite(loc.lat) || loc.lat < -90 || loc.lat > 90) return null;
-  if (!Number.isFinite(loc.lon) || loc.lon < -180 || loc.lon > 180) return null;
-  if (!Number.isFinite(loc.rangeKm) || loc.rangeKm < 1 || loc.rangeKm > MAX_RANGE_KM) return null;
-  return loc;
-}
-
-function initialLocation() {
-  const params = new URLSearchParams(window.location.search);
-  if (params.has('lat') && params.has('lon')) {
-    return parseLocation(params.get('lat'), params.get('lon'), params.get('range') ?? DEFAULT_RANGE_KM);
-  }
+// Where the map was left last time, or home.
+function loadView() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved) return parseLocation(saved.lat, saved.lon, saved.rangeKm);
+    const v = JSON.parse(localStorage.getItem(VIEW_KEY));
+    if (v && Math.abs(v.lat) <= 85 && Math.abs(v.lon) <= 180 && v.rangeKm >= 1 && v.rangeKm <= MAX_RANGE_KM) {
+      return { lat: v.lat, lon: v.lon, rangeKm: v.rangeKm };
+    }
   } catch {
-    // No storage (private window, blocked site data): just ask again.
+    // No storage (private window, blocked site data): start at home.
   }
-  return null;
+  return { ...HOME, rangeKm: DEFAULT_RANGE_KM };
 }
 
-function fillForm(loc) {
-  els.lat.value = loc ? loc.lat : '';
-  els.lon.value = loc ? loc.lon : '';
-  els.range.value = loc ? loc.rangeKm : DEFAULT_RANGE_KM;
-}
-
-// Saved in the browser and the address bar (not for the default location).
-function rememberLocation(loc) {
+function saveView() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
+    localStorage.setItem(VIEW_KEY, JSON.stringify(state.view));
   } catch {
-    // Not remembered; the address bar still has it.
+    // Not remembered.
   }
-  const params = new URLSearchParams({ lat: loc.lat, lon: loc.lon, range: loc.rangeKm });
-  history.replaceState(null, '', `?${params}`);
 }
 
-function useLocation(loc, { remember = true } = {}) {
-  state.location = loc;
-  state.locationSaved = remember;
-  state.viewCenter = null;
-  zoomTarget = null;
-  state.data = null;
-  state.error = null;
-  state.highlight = null;
-  state.selected = null;
-  trails.clear();
-  fillForm(loc);
-  if (remember) rememberLocation(loc);
-  render();
-  poll();
-  loadWeather();
+// The scale is set at home's latitude, so dragging north or south keeps it.
+function currentView(rangeKm = state.view.rangeKm) {
+  return mapView(state.view, rangeKm, els.canvas.clientWidth, els.canvas.clientHeight, HOME.lat);
 }
 
-// --- moving the map: wheel to zoom, drag to pan ---------------------------------
-
-// The map's middle: the location, unless the map was moved.
-const viewCenter = () => state.viewCenter ?? state.location;
-function currentView(rangeKm = state.location.rangeKm) {
-  return mapView(viewCenter(), rangeKm, els.canvas.clientWidth, els.canvas.clientHeight, state.location.lat);
-}
-
-// Once the map stops moving: save the range and fetch aircraft for what is shown.
+// Once the map stops moving: remember it and fetch aircraft for what is shown.
 let settleTimer = null;
 function settle() {
   clearTimeout(settleTimer);
   settleTimer = setTimeout(() => {
-    if (state.locationSaved) rememberLocation(state.location);
+    saveView();
     poll();
   }, 400);
 }
 
+els.home.addEventListener('click', () => {
+  state.view = { ...HOME, rangeKm: DEFAULT_RANGE_KM };
+  zoomTarget = null;
+  saveView();
+  render();
+  poll();
+});
+
 // The range changes smoothly while scrolling (the exact value is kept here, the
-// shown one is rounded). The point under the mouse stays where it is.
+// used one is rounded). The point under the mouse stays where it is.
 let zoomTarget = null;
 const roundRange = (km) => (km < 10 ? Math.round(km * 10) / 10 : Math.round(km));
 
-// On the whole map section, so scrolling over the rain button or legend zooms too.
+// On the whole map section, so scrolling over the legend or credits zooms too.
 els.canvas.parentElement.addEventListener('wheel', (event) => {
-  if (!state.location) return;
   event.preventDefault();
   // Pixels, lines or pages, depending on the device.
   const px = event.deltaY * (event.deltaMode === 1 ? 33 : event.deltaMode === 2 ? 800 : 1);
-  zoomTarget ??= state.location.rangeKm;
+  zoomTarget ??= state.view.rangeKm;
   zoomTarget = Math.min(MAX_RANGE_KM, Math.max(1, zoomTarget * Math.exp(px * 0.0015)));
   const rangeKm = roundRange(zoomTarget);
-  if (rangeKm === state.location.rangeKm) return;
+  if (rangeKm === state.view.rangeKm) return;
   const box = els.canvas.getBoundingClientRect();
   const x = event.clientX - box.left;
   const y = event.clientY - box.top;
   const under = currentView().toLatLon(x, y);
   const after = currentView(rangeKm);
   const p = after.toScreen(under.lat, under.lon);
-  state.viewCenter = after.toLatLon(after.width / 2 + (p.x - x), after.height / 2 + (p.y - y));
-  state.location = { ...state.location, rangeKm };
-  els.range.value = rangeKm;
+  state.view = { ...after.toLatLon(after.width / 2 + (p.x - x), after.height / 2 + (p.y - y)), rangeKm };
   render();
   settle();
 }, { passive: false });
@@ -181,7 +142,7 @@ els.canvas.parentElement.addEventListener('wheel', (event) => {
 let drag = null; // { x, y, view, moved }
 let dragged = false; // the click that ends a drag selects nothing
 els.canvas.addEventListener('pointerdown', (event) => {
-  if (event.button !== 0 || !state.location) return;
+  if (event.button !== 0) return;
   drag = { x: event.clientX, y: event.clientY, view: currentView(), moved: false };
   els.canvas.setPointerCapture(event.pointerId);
 });
@@ -193,7 +154,7 @@ els.canvas.addEventListener('pointermove', (event) => {
   drag.moved = true;
   els.canvas.style.cursor = 'grabbing';
   const v = drag.view;
-  state.viewCenter = v.toLatLon(v.width / 2 - dx, v.height / 2 - dy);
+  state.view = { ...v.toLatLon(v.width / 2 - dx, v.height / 2 - dy), rangeKm: state.view.rangeKm };
   render();
 });
 function endDrag() {
@@ -209,51 +170,6 @@ function endDrag() {
 els.canvas.addEventListener('pointerup', endDrag);
 els.canvas.addEventListener('pointercancel', endDrag);
 
-// Back to the location (shown once the map has moved off it).
-els.recenter.addEventListener('click', () => {
-  state.viewCenter = null;
-  render();
-  poll();
-});
-function renderRecenter() {
-  const v = state.location && currentView();
-  const home = v && v.toScreen(state.location.lat, state.location.lon);
-  els.recenter.hidden = !home || Math.hypot(home.x - v.width / 2, home.y - v.height / 2) < 10;
-}
-
-// Accept "55.6761, 12.5683" (as copied from a map) in the latitude field.
-els.lat.addEventListener('input', () => {
-  const pair = els.lat.value.match(/^\s*(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if (pair) [, els.lat.value, els.lon.value] = pair;
-});
-
-els.form.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const loc = parseLocation(els.lat.value, els.lon.value, els.range.value);
-  if (!loc) {
-    showStatus(`Latitude must be −90 to 90, longitude −180 to 180 and range 1 to ${MAX_RANGE_KM} km.`, true);
-    return;
-  }
-  useLocation(loc);
-});
-
-els.locate.addEventListener('click', () => {
-  if (!navigator.geolocation) {
-    showStatus('This browser has no location service. Type the coordinates instead.', true);
-    return;
-  }
-  showStatus('Asking the browser for your location…');
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const round4 = (v) => Math.round(v * 1e4) / 1e4;
-      const range = Number(els.range.value) || DEFAULT_RANGE_KM;
-      useLocation(parseLocation(round4(pos.coords.latitude), round4(pos.coords.longitude), range));
-    },
-    (err) => showStatus(`Couldn't get your location: ${err.message}`, true),
-    { timeout: 15000, maximumAge: 600000 },
-  );
-});
-
 // --- polling ----------------------------------------------------------------
 
 let timer = null;
@@ -263,13 +179,12 @@ async function poll() {
   clearTimeout(timer);
   timer = null;
   controller?.abort();
-  if (!state.location || document.hidden) return;
+  if (document.hidden) return;
 
   const ctrl = (controller = new AbortController());
-  const { rangeKm } = state.location;
-  const center = viewCenter();
-  const lat = center.lat.toFixed(4);
-  const lon = center.lon.toFixed(4);
+  const { rangeKm } = state.view;
+  const lat = state.view.lat.toFixed(4);
+  const lon = state.view.lon.toFixed(4);
   // Out to the map's corners, within what the feeds allow.
   const radius = Math.min(MAX_RANGE_KM, Math.ceil(cornerRangeKm(rangeKm, els.canvas.clientWidth, els.canvas.clientHeight)));
   try {
@@ -279,8 +194,8 @@ async function poll() {
       const detail = body.failures ? ` (${body.failures.join('; ')})` : '';
       throw new Error((body.error || `HTTP ${res.status}`) + detail);
     }
-    // Distances and directions are from the location, also when the map shows somewhere else.
-    state.data = state.viewCenter ? fromHome(body, state.location) : body;
+    // Distances from home, wherever the map is; the list is sorted by them.
+    state.data = fromHome(body);
     trails.record(body);
     state.lastOk = Date.now();
     state.error = null;
@@ -288,7 +203,7 @@ async function poll() {
     if (ctrl.signal.aborted) return;
     state.error = err.message;
   }
-  if (ctrl.signal.aborted) return; // superseded by a newer location
+  if (ctrl.signal.aborted) return; // superseded by a newer request
   controller = null;
   render();
   timer = setTimeout(poll, state.refreshS * 1000);
@@ -332,11 +247,9 @@ let weatherController = null;
 
 async function loadWeather() {
   weatherController?.abort();
-  if (!state.location) return;
   const ctrl = (weatherController = new AbortController());
-  const { lat, lon } = state.location;
+  const { lat, lon } = HOME;
   state.weatherAt = Date.now();
-  if (state.weather && (state.weather.lat !== lat || state.weather.lon !== lon)) state.weather = null;
   renderWeather();
   try {
     const w = await fetchWeather(lat, lon, (url, opts) => fetch(url, { ...opts, signal: AbortSignal.any([opts.signal, ctrl.signal]) }));
@@ -349,7 +262,7 @@ async function loadWeather() {
   }
   renderWeather();
   renderClock();
-  renderRain(); // its time is shown in the location's time zone
+  renderRain(); // its time is shown in home's time zone
 }
 
 async function loadRain() {
@@ -367,7 +280,7 @@ async function loadRain() {
 // Weather and rain change slowly: refresh them when due, and not in a background tab.
 function refreshSlow() {
   if (document.hidden) return;
-  if (state.location && Date.now() - state.weatherAt > WEATHER_REFRESH_MS) loadWeather();
+  if (Date.now() - state.weatherAt > WEATHER_REFRESH_MS) loadWeather();
   if (state.rainOn && Date.now() - state.rainAt > RAIN_REFRESH_MS) loadRain();
 }
 
@@ -385,7 +298,7 @@ function setRain(on) {
 
 els.rainToggle.addEventListener('click', () => setRain(!state.rainOn));
 
-// The time at the radar's location (once the weather has told us its time
+// The time at home (once the weather has told us its time
 // zone; the browser's until then), and UTC as aviation uses it.
 function renderClock() {
   const { time, zone, utc } = clockParts(new Date(), state.weather?.timeZone);
@@ -396,11 +309,6 @@ function renderClock() {
 }
 
 function renderWeather() {
-  if (!state.location) {
-    els.weather.replaceChildren();
-    els.weather.title = '';
-    return;
-  }
   if (!state.weather) {
     els.weather.textContent = state.weatherError ? `Weather unavailable: ${state.weatherError}` : 'Loading weather…';
     els.weather.title = '';
@@ -482,18 +390,17 @@ function queueDraw() {
 
 // The aircraft on the visible map (the list shows exactly these).
 function aircraftOnMap() {
-  if (!state.data || !state.location) return [];
+  if (!state.data) return [];
   const view = currentView();
   return state.data.aircraft.filter((ac) => onMap(view, ac));
 }
 
-// The feed's answer with distance and direction measured from `home`, nearest
-// first (rounded as the Worker rounds them).
-function fromHome(body, home) {
+// The feed's answer with distances from home, nearest first (rounded as the
+// Worker rounds them; its own are from the map's middle).
+function fromHome(body) {
   const aircraft = body.aircraft.map((ac) => ({
     ...ac,
-    distKm: Number(distanceKm(home.lat, home.lon, ac.lat, ac.lon).toFixed(2)),
-    bearingDeg: Number(bearingDeg(home.lat, home.lon, ac.lat, ac.lon).toFixed(1)),
+    distKm: Number(distanceKm(HOME.lat, HOME.lon, ac.lat, ac.lon).toFixed(2)),
   }));
   aircraft.sort((a, b) => a.distKm - b.distKm);
   return { ...body, aircraft };
@@ -510,18 +417,14 @@ function drawCanvas() {
   }
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (!state.location) {
-    ctx.clearRect(0, 0, width, height);
-    return;
-  }
   const colors = cssColors();
   lastView = drawMap(ctx, {
     width,
     height,
-    center: viewCenter(),
-    home: state.location,
+    center: state.view,
+    home: HOME,
     aircraft: aircraftOnMap(),
-    rangeKm: state.location.rangeKm,
+    rangeKm: state.view.rangeKm,
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
     trail: selectedTrail(),
     colors,
@@ -599,15 +502,12 @@ function renderList() {
       altitudeCell(ac),
       cell(formatSpeed(ac.speedKmh), 'num'),
       cell(formatDistance(ac.distKm), 'num'),
-      cell(formatDirection(ac.bearingDeg)),
     );
     return tr;
   });
   els.rows.replaceChildren(...rows);
   els.empty.hidden = !state.data || list.length > 0;
-  if (state.data && state.location) {
-    els.empty.textContent = 'No aircraft on the map right now.';
-  }
+  els.empty.textContent = 'No aircraft on the map right now.';
 }
 
 function showStatus(text, isError = false) {
@@ -616,10 +516,6 @@ function showStatus(text, isError = false) {
 }
 
 function renderStatus() {
-  if (!state.location) {
-    showStatus('Enter a location above, or use your browser’s.');
-    return;
-  }
   if (!state.data) {
     showStatus(state.error ? `Couldn't load aircraft: ${state.error}` : 'Loading aircraft…', Boolean(state.error));
     return;
@@ -629,7 +525,7 @@ function renderStatus() {
   // Stale when two refreshes have been missed (20 s at 5 s, 70 s at 30 s).
   const stale = Date.now() - state.lastOk > (2 * state.refreshS + 10) * 1000;
   const parts = [
-    `${count} aircraft on the map (${state.location.rangeKm} km to the nearest edge)`,
+    `${count} aircraft on the map`,
     `from ${state.data.source}`,
     `updated ${ago} s ago`,
   ];
@@ -713,7 +609,6 @@ function renderSelected() {
 function render() {
   renderSelected();
   drawCanvas();
-  renderRecenter();
   renderList();
   renderStatus();
 }
@@ -736,7 +631,7 @@ els.rows.addEventListener('mouseleave', () => {
   drawCanvas();
 });
 
-// Click an aircraft on the radar for its details; click elsewhere to close them.
+// Click an aircraft on the map for its details; click elsewhere to close them.
 function aircraftAt(event) {
   if (!lastView) return null;
   return hitTest(lastView, aircraftOnMap(), event.offsetX, event.offsetY);
@@ -779,9 +674,9 @@ refreshSlow();
 
 // --- start ------------------------------------------------------------------
 
-const start = initialLocation();
-if (start) {
-  useLocation(start);
-} else {
-  useLocation(DEFAULT_LOCATION, { remember: false });
-}
+// Old addresses carried ?lat=&lon=&range=; the map's position is in the browser now.
+if (window.location.search) history.replaceState(null, '', window.location.pathname);
+state.view = loadView();
+render();
+poll();
+loadWeather();

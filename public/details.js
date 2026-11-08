@@ -3,7 +3,7 @@
 // directly. Answers are kept in memory for this page only: adsbdb's route
 // data may not be copied, published or put into other databases.
 
-import { formatAltitude, formatDirection, formatDistance, formatSpeed, displayName } from './format.js';
+import { formatAltitude, formatSpeed, displayName } from './format.js';
 import { distanceKm } from './geo.js';
 
 const API = 'https://api.adsbdb.com/v0';
@@ -177,7 +177,6 @@ export function renderDetails(container, { ac, info, track, trail, seen, onClose
     ['Altitude', ac.onGround || ac.altM === null ? formatAltitude(ac) : formatAltitude(ac) + climb(ac.vrateMs)],
     ['Speed', formatSpeed(ac.speedKmh)],
     ['Heading', ac.trackDeg === null ? null : `${Math.round(ac.trackDeg) % 360}°`],
-    ['Position', `${formatDistance(ac.distKm)} ${formatDirection(ac.bearingDeg)}`],
     ['Path flown', pathText(track, trail)],
     ['Squawk', ac.squawk],
     ['ICAO address', ac.hex.toUpperCase()],

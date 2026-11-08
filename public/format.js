@@ -7,7 +7,6 @@ const whole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
 export const compass = (deg) => COMPASS[Math.round(deg / 22.5) % 16];
 
-export const formatDirection = (deg) => `${compass(deg)} ${Math.round(deg) % 360}°`;
 
 export const formatDistance = (km) => `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
 

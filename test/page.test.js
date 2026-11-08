@@ -2,7 +2,7 @@
 // real browser.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { climbArrow, compass, displayName, formatAltitude, formatDirection, formatDistance, formatSpeed } from '../public/format.js';
+import { climbArrow, compass, displayName, formatAltitude, formatDistance, formatSpeed } from '../public/format.js';
 import { cornerRangeKm, mapView, onMap } from '../public/radar.js';
 
 test('compass points', () => {
@@ -11,8 +11,6 @@ test('compass points', () => {
   assert.equal(compass(12), 'NNE');
   assert.equal(compass(195.6), 'SSW');
   assert.equal(compass(359), 'N');
-  assert.equal(formatDirection(359.7), 'N 0°');
-  assert.equal(formatDirection(195.6), 'SSW 196°');
 });
 
 test('distances, altitudes and speeds', () => {

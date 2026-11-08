@@ -8,7 +8,7 @@
 // 1–3). The rest are groups; --only runs just those (the full run asks the
 // flight feeds for a lot, and they answer 429 when asked too often):
 //   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
-//   location (6–9: use my location, reload, invalid input, feed failure)
+//   home (6–8: the map remembered after a reload and in a new tab, the Home button, feed failure)
 // The main pages run with a 5 s refresh (set in their browser storage) so the
 // timing checks don't take minutes; `refresh` checks the 30 s default in a fresh profile.
 // Laptop browser only: phone widths aren't checked (user's choice, 2026-11-08).
@@ -19,9 +19,9 @@
 // elsewhere `npm i -g playwright && npx playwright install chromium`).
 // Checks: list = API response, each aircraft drawn at its expected pixel
 // (Web Mercator computed independently of public/mercator.js), map tiles load,
-// refresh, hover highlight, "use my location", reload/localStorage, invalid
-// input, feed failure, no console errors; clock in the location's
-// time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
+// distances from Copenhagen, zoom at the pointer, drag, refresh, hover
+// highlight, the map remembered in the browser, Home, feed failure, no console
+// errors; clock in Copenhagen's time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
 // exactly (checked with a synthetic tile) and the rain on/off switch. Screenshots go to the
 // given directory (default: the system temp dir); look at them too: a tile
 // server can answer 200 with a placeholder image.
@@ -31,7 +31,9 @@ const { chromium } = require('playwright');
 const BASE = process.env.FLIGHTMON_URL || 'http://127.0.0.1:8787';
 const args = process.argv.slice(2);
 const OUT = args.find((a) => !a.startsWith('--')) || os.tmpdir();
-const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'location'];
+const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'home'];
+const HOME = { lat: 55.6761, lon: 12.5683 }; // Copenhagen, the page's home
+const AT_HOME = { center: HOME, range: 50 }; // the page's default map
 const onlyArg = args.find((a) => a.startsWith('--only='));
 const only = onlyArg ? onlyArg.slice('--only='.length).split(',').filter(Boolean) : null;
 if (only?.some((g) => !GROUPS.includes(g))) {
@@ -74,8 +76,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   // Map tiles are fetched from the internet; use the proxy when there is one.
   const proxy = process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined;
   const browser = await chromium.launch({ proxy });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2,
-    geolocation: { latitude: 55.618, longitude: 12.656 }, permissions: ['geolocation'] });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
   // 5 s refresh for this run unless a step chose another (the page's default is 30 s).
   await context.addInitScript(() => { if (!localStorage.getItem('flightmon.refresh')) localStorage.setItem('flightmon.refresh', '5'); });
   const page = await context.newPage();
@@ -117,43 +118,37 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     if (u.startsWith('https://tilecache.rainviewer.com/')) rainTiles.push({ url: u, status: r.status(), type: r.headers()['content-type'] });
   });
 
-  console.log('1. First visit, no location: Copenhagen by default, not saved');
-  await page.goto(BASE + '/');
+  console.log('1. First visit (from an old address with ?lat=&lon=&range=): Copenhagen at 50 km, nothing saved');
+  await page.goto(BASE + '/?lat=10&lon=10&range=5');
   await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
-  check(apiCalls > 0, 'aircraft loaded for the default location');
-  check(await page.inputValue('#lat') === '55.6761' && await page.inputValue('#lon') === '12.5683', 'form shows the default (Copenhagen)');
-  check(!page.url().includes('lat='), 'default not put in the URL: ' + page.url());
-  check(await page.evaluate(() => localStorage.getItem('flightmon.location')) === null, 'default not saved');
+  check(apiCalls > 0, 'aircraft loaded');
+  check(new URL(page.url()).search === '', 'old address parameters dropped: ' + page.url());
+  check(await page.evaluate(() => localStorage.getItem('flightmon.view')) === null, 'nothing saved before the map is moved');
+  check(Boolean(await page.$('#home')) && !(await page.$('#lat')) && !(await page.$('#locate')), 'Home button; no location form');
+  check(await page.$eval('header', (h) => Boolean(h.querySelector('#rain-toggle'))), 'Rain button in the header');
   await page.screenshot({ path: OUT + '/00-first-visit.png' });
 
-  console.log('2. Paste "55.6761, 12.5683" into latitude, submit');
-  await page.fill('#lat', '55.6761, 12.5683');
-  await page.click('button[type=submit]');
-  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
-  check(page.url().includes('lat=55.6761&lon=12.5683&range=50'), 'URL updated: ' + page.url());
-  check(await page.inputValue('#lon') === '12.5683', 'longitude split from the pasted pair');
-  check(await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.location')).lat) === 55.6761, 'remembered in localStorage');
-
-  // `viewCenter`: the map's middle when it was moved off the location.
-  async function verifyAgainstApi(label, viewCenter = null) {
+  // `view`: what the map should show, { center, range }.
+  async function verifyAgainstApi(label, view = AT_HOME) {
     await page.waitForTimeout(300);
     const api = lastApi;
     const rows = await page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => ({ hex: tr.dataset.hex, cells: [...tr.cells].map((c) => c.textContent) })));
     const info = await page.evaluate(() => { const c = document.getElementById('radar'); return { w: c.clientWidth, h: c.clientHeight, dpr: devicePixelRatio }; });
-    const q = new URL(page.url()).searchParams;
-    const range = Number(q.get('range'));
-    const home = { lat: Number(q.get('lat')), lon: Number(q.get('lon')) };
-    const center = viewCenter ?? home;
-    if (viewCenter) check(Math.abs(api.center.lat - center.lat) < 2e-4 && Math.abs(api.center.lon - center.lon) < 2e-4, `${label}: asked the feed around the map's middle (${api.center.lat}, ${api.center.lon}; expected ${center.lat.toFixed(4)}, ${center.lon.toFixed(4)})`);
+    const { center, range } = view;
+    const home = HOME;
+    check(Math.abs(api.center.lat - center.lat) < 2e-4 && Math.abs(api.center.lon - center.lon) < 2e-4, `${label}: asked the feed around the map's middle (${api.center.lat}, ${api.center.lon}; expected ${center.lat.toFixed(4)}, ${center.lon.toFixed(4)})`);
     const wantRadius = Math.min(463, Math.ceil(range * Math.hypot(info.w, info.h) / Math.min(info.w, info.h)));
     check(api.center.radiusKm === wantRadius, `${label}: asked the feed out to the map's corners (${api.center.radiusKm} km for ${range} km to the nearest edge)`);
-    // On the map, nearest the location first (the page measures from it, wherever the map is).
+    // On the map, nearest Copenhagen first (the page measures from there, wherever the map is).
     const visible = api.aircraft.filter((a) => { const p = expectedXY(a, center, range, info.w, info.h, home.lat); return p.x >= 0 && p.x <= info.w && p.y >= 0 && p.y <= info.h; })
       .map((a) => ({ ...a, homeKm: homeKm(home, a) })).sort((a, b) => a.homeKm - b.homeKm);
     check(rows.map((r) => r.hex).join() === visible.map((a) => a.hex).join(), `${label}: list = the API's aircraft on the map (${rows.length} of ${api.aircraft.length}, same order)`);
     const dists = visible.map((a) => a.homeKm);
     check(!rows.some((r) => r.cells[0].includes('@')), `${label}: no undecoded '@' callsigns shown`);
     check(dists.every((d, i) => i === 0 || dists[i - 1] <= d), `${label}: sorted by distance`);
+    const km = (d) => { const r = Number(d.toFixed(2)); return `${r < 10 ? r.toFixed(1) : Math.round(r)} km`; };
+    const distBad = rows.filter((r, i) => visible[i] && r.cells[4] !== km(visible[i].homeKm));
+    check(rows.every((r) => r.cells.length === 5) && distBad.length === 0, `${label}: Distance column = from Copenhagen, no Direction column` + (distBad.length ? ' — ' + distBad.slice(0, 3).map((r) => r.cells.join(' | ')).join('; ') : ''));
     // Pixel check: each aircraft is drawn at its projected position.
     const alert = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--alert').trim()));
     const halo = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()));
@@ -170,7 +165,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const near = (c) => px.some((q) => c.every((v, k) => Math.abs(v - q[k]) < 40) && q[3] > 200);
       // Where icons overlap, the one on top (fill or dark outline) may be another aircraft's.
       const neighbours = pts.filter((q, j) => j !== i && Math.hypot(q.x - p.x, q.y - p.y) < 20);
-      if (near(expectedColor(p.a)) || neighbours.some((q) => near(expectedColor(q.a))) || (neighbours.length && near(halo))) ok++; else bad.push(`${p.a.hex} (${p.a.callsign}, ground=${p.a.onGround}, ${p.a.distKm} km ${p.a.bearingDeg}°) at ${p.x.toFixed(0)},${p.y.toFixed(0)} rgba(${px[5]})`);
+      if (near(expectedColor(p.a)) || neighbours.some((q) => near(expectedColor(q.a))) || (neighbours.length && near(halo))) ok++; else bad.push(`${p.a.hex} (${p.a.callsign}, ground=${p.a.onGround}, ${p.a.homeKm.toFixed(1)} km from home) at ${p.x.toFixed(0)},${p.y.toFixed(0)} rgba(${px[5]})`);
     });
     if (bad.length) { const box = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y }; }); const p = pts.find((q) => bad[0].startsWith(q.a.hex)); await page.screenshot({ path: OUT + '/miss.png', clip: { x: box.x + p.x - 30, y: box.y + p.y - 30, width: 60, height: 60 } }); }
     check(bad.length === 0, `${label}: ${ok}/${pts.length} aircraft drawn at their projected pixel` + (bad.length ? ' — off: ' + bad.join('; ') : ''));
@@ -210,8 +205,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
 
     // Mouse wheel: up zooms in, down zooms out, keeping the point under the pointer in place.
     const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
-    const home = { lat: 55.6761, lon: 12.5683 };
-    let view = { center: home, range: 50 }; // what the page should show
+    const home = HOME;
+    let view = AT_HOME; // what the page should show
+    const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.view')));
+    const savedIs = (v, s) => s && s.rangeKm === v.range && Math.abs(s.lat - v.center.lat) < 2e-4 && Math.abs(s.lon - v.center.lon) < 2e-4;
     const ptr = { x: rect.w / 3, y: rect.h / 3 };
     await page.mouse.move(rect.x + ptr.x, rect.y + ptr.y);
     // The page gets the delta in CSS pixels (Chromium divides Playwright's by the device pixel ratio).
@@ -229,17 +226,16 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const c0 = merc(view.center.lat, view.center.lon);
       const under = { x: c0.x + (ptr.x - rect.w / 2) / W0, y: c0.y + (ptr.y - rect.h / 2) / W0 };
       view = { center: unmerc({ x: under.x - (ptr.x - rect.w / 2) / W1, y: under.y - (ptr.y - rect.h / 2) / W1 }), range: km };
-      check(await page.inputValue('#range') === String(km), `wheel ${dy > 0 ? 'down' : 'up'} (deltaY ${got}): range ${await page.inputValue('#range')} km (expected ${km})`);
-      await page.waitForFunction((km) => location.search.includes(`range=${km}&`) || location.search.endsWith(`range=${km}`), km, { timeout: 5000 }).catch(() => {});
-      check(new URL(page.url()).searchParams.get('range') === String(km), `range saved in the URL once scrolling stops: ${page.url()}`);
       for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
-      await verifyAgainstApi(`zoomed to ${km} km at the pointer`, view.center);
+      const sv = await saved();
+      check(savedIs(view, sv), `wheel ${dy > 0 ? 'down' : 'up'} (deltaY ${got}): map saved once scrolling stops: ${JSON.stringify(sv)} (expected ${km} km around ${view.center.lat.toFixed(4)}, ${view.center.lon.toFixed(4)})`);
+      await verifyAgainstApi(`zoomed to ${km} km at the pointer`, view);
     };
     await zoomTo(-300); // in
     await zoomTo(300); // and back to 50
-    check(await page.inputValue('#range') === '50', 'back at 50 km');
+    check(view.range === 50, 'back at 50 km');
 
-    // Drag: the map follows the mouse; the location, its distances and the URL stay.
+    // Drag: the map follows the mouse; distances stay from Copenhagen.
     {
       const n = apiCalls;
       const from = { x: rect.w / 2 + 40, y: rect.h / 2 + 60 };
@@ -251,16 +247,16 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const c = merc(view.center.lat, view.center.lon);
       view = { center: unmerc({ x: c.x - 180 / W, y: c.y - 90 / W }), range: 50 };
       check(await page.$eval('#details', (e) => e.hidden), 'a drag selects nothing');
-      check(!(await page.$eval('#recenter', (e) => e.hidden)), '"Centre on location" shown once the map has moved');
-      check(page.url().includes('lat=55.6761&lon=12.5683'), 'the location stays: ' + page.url());
       for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
-      await verifyAgainstApi('dragged 180, 90 px', view.center);
+      check(savedIs(view, await saved()), 'dragged map saved');
+      check(new URL(page.url()).search === '', 'nothing in the address: ' + page.url());
+      await verifyAgainstApi('dragged 180, 90 px', view);
       await page.screenshot({ path: OUT + '/dragged.png' });
       const n2 = apiCalls;
-      await page.click('#recenter');
-      check(await page.$eval('#recenter', (e) => e.hidden), 'back on the location: the button goes');
+      await page.click('#home');
       for (let t = 0; t < 20 && apiCalls === n2; t++) await page.waitForTimeout(250);
-      await verifyAgainstApi('centred on the location again');
+      check(savedIs(AT_HOME, await saved()), 'Home: Copenhagen at 50 km, saved');
+      await verifyAgainstApi('after Home');
     }
     await page.mouse.move(5, 5);
   }
@@ -335,7 +331,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const recordedWeather = require('node:fs').readFileSync(require('node:path').join(__dirname, '../test/fixtures/openmeteo-cph.json'));
     await rp.route('https://api.open-meteo.com/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: recordedWeather }));
     await rp.route('**/api/aircraft*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ now: Date.now(), source: 'test', center: { ...center, radiusKm: 50 }, aircraft: [] }) }));
-    await rp.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
+    await rp.goto(BASE + '/');
     await rp.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
     await rp.waitForTimeout(3000); // map and rain tiles
     {
@@ -427,7 +423,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await page.keyboard.press('Escape');
     // A fresh browser profile (no stored choice): the default.
     const fresh = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await fresh.goto(BASE + '/?lat=55.6761&lon=12.5683&range=50');
+    await fresh.goto(BASE + '/');
     check(await fresh.inputValue('#refresh') === '30', 'refresh is 30 s by default');
     await fresh.close();
   }
@@ -600,30 +596,37 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     page.off('response', onResp);
   }
 
-  if (!want('location')) skipped('6–9', 'location'); else {
-    console.log('6. Use my location (geolocation mocked to CPH airport 55.618, 12.656)');
-    await page.fill('#range', '20');
-    await page.click('#locate');
-    await page.waitForFunction(() => location.search.includes('lat=55.618'));
-    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('(20 km to the nearest edge)'));
-    check(page.url().includes('lat=55.618&lon=12.656&range=20'), 'URL: ' + page.url());
-    const r2 = await verifyAgainstApi('airport, 20 km');
-    check(r2.visible.every((a) => a.distKm <= r2.api.center.radiusKm), 'all listed aircraft within what the feed was asked for');
-
-    console.log('7. Reload: location comes back from the URL; new tab without params: from localStorage');
-    await page.reload(); await page.waitForFunction(() => document.querySelector('#status').textContent.includes('(20 km to the nearest edge)'));
-    check(true, 'reload keeps location');
-    const p2 = await context.newPage(); await p2.goto(BASE + '/');
-    await p2.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
-    check(await p2.inputValue('#lat') === '55.618', 'new tab restored from localStorage');
+  if (!want('home')) skipped('6–8', 'home'); else {
+    console.log('6. The map is remembered: after a reload and in a new tab');
+    const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
+    const n = apiCalls;
+    await page.mouse.move(rect.x + rect.w / 2, rect.y + rect.h / 2);
+    await page.mouse.down();
+    await page.mouse.move(rect.x + rect.w / 2 - 150, rect.y + rect.h / 2, { steps: 5 });
+    await page.mouse.up();
+    for (let t = 0; t < 20 && apiCalls === n; t++) await page.waitForTimeout(250);
+    const sv = await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.view')));
+    const moved = { center: { lat: sv.lat, lon: sv.lon }, range: sv.rangeKm };
+    check(sv.lon > HOME.lon && Math.abs(sv.lat - HOME.lat) < 1e-6, `dragged east of Copenhagen and saved: ${JSON.stringify(sv)}`);
+    const n2 = apiCalls;
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('aircraft on the map'));
+    for (let t = 0; t < 20 && apiCalls === n2; t++) await page.waitForTimeout(250);
+    const r2 = await verifyAgainstApi('after a reload', moved);
+    const p2 = await context.newPage();
+    const req = p2.waitForRequest((r) => r.url().includes('/api/aircraft'));
+    await p2.goto(BASE + '/');
+    const q2 = new URL((await req).url()).searchParams;
+    check(q2.get('lat') === sv.lat.toFixed(4) && q2.get('lon') === sv.lon.toFixed(4), `a new tab opens the same map (asked around ${q2.get('lat')}, ${q2.get('lon')})`);
     await p2.close();
 
-    console.log('8. Invalid input');
-    await page.fill('#lat', '123'); await page.click('button[type=submit]');
-    check((await page.textContent('#status')).includes('Latitude must be'), 'error shown: ' + await page.textContent('#status'));
-    check(page.url().includes('lat=55.618'), 'location unchanged');
+    console.log('7. Home: back to Copenhagen at 50 km');
+    const n3 = apiCalls;
+    await page.click('#home');
+    for (let t = 0; t < 20 && apiCalls === n3; t++) await page.waitForTimeout(250);
+    await verifyAgainstApi('after Home');
 
-    console.log('9. API failure keeps the last data and says so');
+    console.log('8. API failure keeps the last data and says so');
     const errorsBefore = errors.length;
     injecting = true;
     await page.route('**/api/aircraft*', (route) => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'No flight feed answered', failures: ['adsb.lol: HTTP 503', 'adsb.fi: HTTP 503'] }) }));
