@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { climbArrow, compass, displayName, formatAltitude, formatDistance, formatSpeed } from '../public/format.js';
-import { cornerRangeKm, mapView, maxRangeKm, onMap } from '../public/radar.js';
+import { centredOn, cornerRangeKm, mapView, maxRangeKm, onMap, rangeAtLat } from '../public/radar.js';
 import { delayMs, isRateLimited, nextBackoffS } from '../public/polling.js';
 
 test('compass points', () => {
@@ -87,4 +87,25 @@ test('rate-limited: a 429, or a 502 when every feed answered 429', () => {
   assert.ok(!isRateLimited(502, { failures: ['adsb.lol: HTTP 429', 'adsb.fi: HTTP 503'] }));
   assert.ok(!isRateLimited(502, { failures: [] }));
   assert.ok(!isRateLimited(500, null));
+});
+
+test('moving home north or south keeps the map\'s scale', () => {
+  const cph = { lat: 55.6761, lon: 12.5683 };
+  const lisbon = { lat: 38.7223, lon: -9.1393 };
+  const r = rangeAtLat(50, cph.lat, lisbon.lat);
+  assert.ok(Math.abs(r - 50 * Math.cos(lisbon.lat * Math.PI / 180) / Math.cos(cph.lat * Math.PI / 180)) < 1e-9);
+  assert.ok(r > 69 && r < 70, `${r}`); // the same pixels cover more km further south
+  // Same scale: the world is as many pixels wide before and after.
+  const before = mapView(lisbon, 50, 1000, 800, cph.lat);
+  const after = mapView(lisbon, r, 1000, 800, lisbon.lat);
+  assert.ok(Math.abs(before.worldSize - after.worldSize) < 1e-6);
+  assert.equal(rangeAtLat(50, cph.lat, cph.lat), 50);
+});
+
+test('centred on home: within 10 px of the map\'s middle', () => {
+  const home = { lat: 55.6761, lon: 12.5683 };
+  const view = mapView(home, 50, 1000, 800);
+  assert.ok(centredOn(view, home));
+  assert.ok(centredOn(view, { lat: home.lat, lon: home.lon + 0.005 })); // ~0.3 km: ~2 px
+  assert.ok(!centredOn(view, { lat: home.lat, lon: home.lon + 0.05 })); // ~3 km: ~25 px
 });

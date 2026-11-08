@@ -11,7 +11,8 @@
 <body>
   <header>
     <h1>Flightmon</h1>
-    <button type="button" id="home" title="Back to Copenhagen">Home</button>
+    <button type="button" id="home" title="Back to home">Home</button>
+    <button type="button" id="set-home" title="Make the middle of the map home (and this zoom its zoom)">Set home</button>
     <span class="rain">
       <button type="button" id="rain-toggle" class="toggle" aria-pressed="false">Rain</button>
       <span id="rain-status" class="rain-status"></span>
@@ -27,7 +28,7 @@
       <button type="button" id="refresh-now" title="Refresh now" aria-label="Refresh now">↻</button>
     </label>
     <div class="now">
-      <p class="clock" title="Time in Copenhagen"><span id="clock-time" class="clock-time"></span> <span id="clock-zone" class="muted"></span> <span id="clock-utc" class="muted"></span></p>
+      <p class="clock" title="Time at home"><span id="clock-time" class="clock-time"></span> <span id="clock-zone" class="muted"></span> <span id="clock-utc" class="muted"></span></p>
       <p id="weather" class="weather" aria-live="polite"></p>
     </div>
   </header>
@@ -47,7 +48,7 @@
             <th>Type</th>
             <th class="num">Altitude</th>
             <th class="num">Speed</th>
-            <th class="num" title="From Copenhagen">Distance</th>
+            <th class="num" title="From home">Distance</th>
           </tr>
         </thead>
         <tbody></tbody>

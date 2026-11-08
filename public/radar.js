@@ -27,6 +27,20 @@ export function maxRangeKm(width, height, feedKm = 463) {
   return Math.floor((feedKm * Math.min(width, height)) / Math.hypot(width, height));
 }
 
+// The range that keeps the map's scale when the latitude it's measured at
+// moves from `fromLat` to `toLat` (e.g. when home moves north or south).
+export function rangeAtLat(rangeKm, fromLat, toLat) {
+  const rad = (d) => (d * Math.PI) / 180;
+  return (rangeKm * Math.cos(rad(toLat))) / Math.cos(rad(fromLat));
+}
+
+// Home within this many pixels of the map's middle counts as "centred on home".
+export const CENTRED_PX = 10;
+export function centredOn(view, place) {
+  const p = view.toScreen(place.lat, place.lon);
+  return Math.hypot(p.x - view.width / 2, p.y - view.height / 2) < CENTRED_PX;
+}
+
 // Whether an aircraft is on the visible map.
 export function onMap(view, ac) {
   const p = view.toScreen(ac.lat, ac.lon);
@@ -49,7 +63,8 @@ export function hitTest(view, aircraft, x, y, maxPx = 18) {
   return best;
 }
 
-// `center`: the middle of the map; `home`: the chosen location (a dot).
+// `center`: the middle of the map (a grey crosshair when it isn't home);
+// `home`: a green dot.
 // `background(ctx, view)` draws the map tiles (and rain).
 // `highlight`: a Set of hex codes to draw white with a ring.
 // `trail`: points [{ lat, lon, altM, onGround }] flown by the selected aircraft.
@@ -60,7 +75,10 @@ export function drawMap(ctx, { width, height, center, home = center, aircraft, r
   if (background) background(ctx, view);
   if (trail && trail.length > 1) drawTrail(ctx, view, trail, colors.halo);
 
-  // The chosen location: a small dot.
+  // The map's middle, when away from home: where "Set home" would put it.
+  if (!centredOn(view, home)) drawCross(ctx, width / 2, height / 2, colors.muted, colors.halo);
+
+  // Home: a small dot.
   const c = view.toScreen(home.lat, home.lon);
   ctx.beginPath();
   ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
@@ -103,6 +121,19 @@ function haloText(ctx, text, x, y, color, halo) {
   ctx.strokeText(text, x, y);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
+}
+
+function drawCross(ctx, x, y, color, halo) {
+  ctx.beginPath();
+  ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y);
+  ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8);
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = halo;
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.stroke();
 }
 
 function drawRing(ctx, x, y, r, color, halo) {

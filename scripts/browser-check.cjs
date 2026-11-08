@@ -8,7 +8,7 @@
 // 1–3). The rest are groups; --only runs just those (the full run asks the
 // flight feeds for a lot, and they answer 429 when asked too often):
 //   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
-//   home (6–9: the map remembered after a reload and in a new tab, the Home button, feed failure, back-off after a 429)
+//   home (6–10: the map remembered after a reload and in a new tab, the Home button, feed failure, back-off after a 429, Set home)
 // The main pages run with a 5 s refresh (set in their browser storage) so the
 // timing checks don't take minutes; `refresh` checks the 30 s default in a fresh profile.
 // Laptop browser only: phone widths aren't checked (user's choice, 2026-11-08).
@@ -89,8 +89,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     if (/api\.adsbdb\.com/.test(m.location().url) && /status of 40[04]/.test(m.text())) return;
     // /api/track answers 404/429/502 when OpenSky has no track or fails; the card says so.
     if (/\/api\/track\?/.test(m.location().url) && /status of (404|429|502)/.test(m.text())) return;
-    // Open-Meteo's 429 (daily limit; this container shares its IP) is shown on the page.
-    if (/api\.open-meteo\.com/.test(m.location().url) && /status of 429/.test(m.text())) return;
+    // Open-Meteo refusing (429, daily limit) or down (5xx): the page says "Weather
+    // unavailable"; a warning, not a failure (the service, not the page).
+    const meteo = /api\.open-meteo\.com/.test(m.location().url) && m.text().match(/status of (429|5\d\d)/);
+    if (meteo) { warn(`the weather service answered ${meteo[1]}`); return; }
     // /api/aircraft's 502s are judged by their body below (feeds' 429 → warning).
     if (/\/api\/aircraft\?/.test(m.location().url) && /status of 502/.test(m.text())) return;
     errors.push(`${m.text()} (${m.location().url})`);
@@ -134,18 +136,30 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
 
   // `view`: what the map should show, { center, range }.
   async function verifyAgainstApi(label, view = AT_HOME) {
+    // Wait for the feed's answer for this map (an answer to a request made
+    // before the map moved can still arrive after it), then for the page to draw it.
+    const forView = () => {
+      const c = lastApi?.center;
+      return c && lastApi === apiHistory.at(-1) && Math.abs(c.lat - view.center.lat) < 2e-4 && Math.abs(c.lon - view.center.lon) < 2e-4;
+    };
+    for (let t = 0; t < 48 && !forView(); t++) await page.waitForTimeout(250);
     await page.waitForTimeout(300);
     const api = lastApi;
     const rows = await page.$$eval('#aircraft tbody tr', (trs) => trs.map((tr) => ({ hex: tr.dataset.hex, cells: [...tr.cells].map((c) => c.textContent) })));
     const info = await page.evaluate(() => { const c = document.getElementById('radar'); return { w: c.clientWidth, h: c.clientHeight, dpr: devicePixelRatio }; });
     const { center, range } = view;
-    const home = HOME;
+    const home = view.home ?? HOME;
     check(Math.abs(api.center.lat - center.lat) < 2e-4 && Math.abs(api.center.lon - center.lon) < 2e-4, `${label}: asked the feed around the map's middle (${api.center.lat}, ${api.center.lon}; expected ${center.lat.toFixed(4)}, ${center.lon.toFixed(4)})`);
     const wantRadius = Math.min(463, Math.ceil(range * Math.hypot(info.w, info.h) / Math.min(info.w, info.h)));
     check(api.center.radiusKm === wantRadius, `${label}: asked the feed out to the map's corners (${api.center.radiusKm} km for ${range} km to the nearest edge)`);
-    // On the map, nearest Copenhagen first (the page measures from there, wherever the map is).
+    // On the map, nearest home first (the page measures from there, wherever the map is).
+    // The page sorts by distance rounded to 10 m and keeps its earlier order for
+    // ties (aircraft parked side by side), so ties may come in either order.
+    const pos = new Map(rows.map((r, i) => [r.hex, i]));
+    const km10 = (a) => Number(a.homeKm.toFixed(2));
     const visible = api.aircraft.filter((a) => { const p = expectedXY(a, center, range, info.w, info.h, home.lat); return p.x >= 0 && p.x <= info.w && p.y >= 0 && p.y <= info.h; })
-      .map((a) => ({ ...a, homeKm: homeKm(home, a) })).sort((a, b) => a.homeKm - b.homeKm);
+      .map((a) => ({ ...a, homeKm: homeKm(home, a) }))
+      .sort((a, b) => km10(a) - km10(b) || (pos.get(a.hex) ?? 1e9) - (pos.get(b.hex) ?? 1e9));
     const listOk = check(rows.map((r) => r.hex).join() === visible.map((a) => a.hex).join(), `${label}: list = the API's aircraft on the map (${rows.length} of ${api.aircraft.length}, same order)`);
     if (!listOk) {
       // Which differ, and was the answer the page drew newer than the one read here?
@@ -153,6 +167,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const edge = (hex) => { const a = api.aircraft.find((x) => x.hex === hex); if (!a) return 'not in the answer'; const p = expectedXY(a, center, range, info.w, info.h, home.lat); return `at ${p.x.toFixed(1)},${p.y.toFixed(1)} of ${info.w}×${info.h}`; };
       console.log('     only in the list:', [...inList].filter((h) => !inApi.has(h)).map((h) => `${h} (${edge(h)})`).join(', ') || 'none');
       console.log('     only in the answer:', [...inApi].filter((h) => !inList.has(h)).map((h) => `${h} (${edge(h)})`).join(', ') || 'none');
+      const firstDiff = rows.findIndex((r, i) => r.hex !== visible[i]?.hex);
+      if (firstDiff >= 0) console.log('     from position', firstDiff + 1, '— list:', rows.slice(firstDiff, firstDiff + 3).map((r) => `${r.hex} ${r.cells[4]}`).join(', '), '| expected:', visible.slice(firstDiff, firstDiff + 3).map((a) => `${a.hex} ${a.homeKm.toFixed(3)} km`).join(', '));
       console.log('     answers seen:', apiHistory.length, '| this one is the latest:', api === apiHistory.at(-1), '| order differs only:', inList.size === inApi.size && [...inList].every((h) => inApi.has(h)));
     }
     const dists = visible.map((a) => a.homeKm);
@@ -281,9 +297,9 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       view = { center: unmerc({ x: c.x - 180 / W, y: c.y - 90 / W }), range: 50 };
       check(await page.$eval('#details', (e) => e.hidden), 'a drag selects nothing');
       for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
+      await verifyAgainstApi('dragged 180, 90 px', view);
       check(savedIs(view, await saved()), 'dragged map saved');
       check(new URL(page.url()).search === '', 'nothing in the address: ' + page.url());
-      await verifyAgainstApi('dragged 180, 90 px', view);
       await page.screenshot({ path: OUT + '/dragged.png' });
 
       // Zoomed out as far as it goes: the feeds' 463 km still reach the corners.
@@ -665,15 +681,16 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     page.off('response', onResp);
   }
 
-  if (!want('home')) skipped('6–9', 'home'); else {
+  if (!want('home')) skipped('6–10', 'home'); else {
     console.log('6. The map is remembered: after a reload and in a new tab');
     const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
-    const n = apiCalls;
+    const savedBefore = await page.evaluate(() => localStorage.getItem('flightmon.view'));
     await page.mouse.move(rect.x + rect.w / 2, rect.y + rect.h / 2);
     await page.mouse.down();
     await page.mouse.move(rect.x + rect.w / 2 - 150, rect.y + rect.h / 2, { steps: 5 });
     await page.mouse.up();
-    for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
+    // Saved once the map stops moving (0.4 s); a refresh can answer before that.
+    await page.waitForFunction((before) => localStorage.getItem('flightmon.view') !== before, savedBefore, { timeout: 5000 });
     const sv = await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.view')));
     const moved = { center: { lat: sv.lat, lon: sv.lon }, range: sv.rangeKm };
     check(sv.lon > HOME.lon && Math.abs(sv.lat - HOME.lat) < 1e-6, `dragged east of Copenhagen and saved: ${JSON.stringify(sv)}`);
@@ -722,6 +739,44 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(!(await page.textContent('#status')).includes('failed'), 'a good answer clears it: ' + await page.textContent('#status'));
     errors.splice(errorsBefore); // the 502s injected above are expected
     injecting = false;
+
+    console.log('10. Set home: the map\'s middle (and zoom) becomes home');
+    {
+      const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
+      check(await page.$eval('#set-home', (b) => b.disabled), 'Set home greyed out while the map shows home');
+      const n = apiCalls;
+      await page.mouse.move(rect.x + rect.w / 2, rect.y + rect.h / 2);
+      await page.mouse.down();
+      await page.mouse.move(rect.x + rect.w / 2 - 200, rect.y + rect.h / 2, { steps: 5 });
+      await page.mouse.up();
+      for (let t = 0; t < 32 && apiCalls === n; t++) await page.waitForTimeout(250);
+      const muted = hexToRgb(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()));
+      const mid = await page.evaluate(() => { const c = document.getElementById('radar'); const d = c.getContext('2d').getImageData(Math.round(c.width / 2) - 3, Math.round(c.height / 2) - 3, 6, 6).data; const out = []; for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]); return out; });
+      check(mid.some((q) => q.every((v, k) => Math.abs(v - muted[k]) < 25)), 'grey crosshair at the map\'s middle once it\'s away from home');
+      check(!(await page.$eval('#set-home', (b) => b.disabled)), 'Set home available');
+      const weatherAsked = page.waitForRequest((r) => r.url().startsWith('https://api.open-meteo.com/'), { timeout: 5000 }).catch(() => null);
+      await page.click('#set-home');
+      const home = await page.evaluate(() => JSON.parse(localStorage.getItem('flightmon.home')));
+      check(home && home.lon > HOME.lon && Math.abs(home.lat - HOME.lat) < 1e-4 && home.rangeKm === 50, `saved as home: ${JSON.stringify(home)}`);
+      check(await page.$eval('#set-home', (b) => b.disabled), 'Set home greyed out again (the map shows the new home)');
+      const w = await weatherAsked;
+      const wq = w && new URL(w.url()).searchParams;
+      check(Boolean(wq) && Math.abs(Number(wq.get('latitude')) - home.lat) < 1e-3 && Math.abs(Number(wq.get('longitude')) - home.lon) < 1e-3, `weather asked for the new home (${wq?.get('latitude')}, ${wq?.get('longitude')})`);
+      const atHome = { center: { lat: home.lat, lon: home.lon }, range: home.rangeKm, home };
+      await verifyAgainstApi('distances from the new home', atHome);
+      await page.screenshot({ path: OUT + '/new-home.png' });
+      // Away and back: Home now means the new home.
+      const n2 = apiCalls;
+      await page.mouse.move(rect.x + rect.w / 2, rect.y + rect.h / 2);
+      await page.mouse.down();
+      await page.mouse.move(rect.x + rect.w / 2 + 120, rect.y + rect.h / 2 + 80, { steps: 5 });
+      await page.mouse.up();
+      for (let t = 0; t < 32 && apiCalls === n2; t++) await page.waitForTimeout(250);
+      const n3 = apiCalls;
+      await page.click('#home');
+      for (let t = 0; t < 32 && apiCalls === n3; t++) await page.waitForTimeout(250);
+      await verifyAgainstApi('Home goes to the new home', atHome);
+    }
   }
 
   {

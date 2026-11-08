@@ -3,7 +3,7 @@ import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
-import { cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap } from './radar.js';
+import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
 import { delayMs, isRateLimited, nextBackoffS } from './polling.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
 import { distanceKm } from './geo.js';
@@ -14,10 +14,12 @@ import {
 const REFRESH_CHOICES_S = [5, 10, 30, 60, 120]; // the options in index.html
 const DEFAULT_REFRESH_S = 30;
 const REFRESH_KEY = 'flightmon.refresh';
-// Home: Copenhagen. The dot on the map, the weather and the clock are for here;
-// the Home button brings the map back to it at the default zoom.
-const HOME = { lat: 55.6761, lon: 12.5683 };
+// Home: the dot on the map, the weather, the clock and the distances are for
+// there. Copenhagen until "Set home" makes the map's middle (and zoom) home;
+// the Home button brings the map back to it.
 const DEFAULT_RANGE_KM = 50; // from the map's middle to its nearest edge
+const DEFAULT_HOME = { lat: 55.6761, lon: 12.5683, rangeKm: DEFAULT_RANGE_KM }; // Copenhagen
+const HOME_KEY = 'flightmon.home'; // { lat, lon, rangeKm }
 const MAX_RANGE_KM = 463; // the feeds' limit
 const VIEW_KEY = 'flightmon.view'; // where the map was left: { lat, lon, rangeKm }
 const RAIN_KEY = 'flightmon.rain';
@@ -28,6 +30,7 @@ const RAIN_STALE_S = 30 * 60;
 const $ = (id) => document.getElementById(id);
 const els = {
   home: $('home'),
+  setHome: $('set-home'),
   canvas: $('radar'),
   attribution: $('attribution'),
   clockTime: $('clock-time'),
@@ -46,7 +49,8 @@ const els = {
 };
 
 const state = {
-  view: { ...HOME, rangeKm: DEFAULT_RANGE_KM }, // the map's middle and zoom
+  home: { ...DEFAULT_HOME }, // where home is, and its zoom
+  view: { ...DEFAULT_HOME }, // the map's middle and zoom
   data: null, // last good /api/aircraft response
   lastOk: 0,
   refreshS: DEFAULT_REFRESH_S, // seconds between aircraft requests
@@ -70,17 +74,25 @@ let lastView = null; // the radar's projection as last drawn, for clicks
 
 // --- the map: home, wheel to zoom, drag to move ---------------------------------
 
-// Where the map was left last time, or home.
-function loadView() {
+// A saved place ({ lat, lon, rangeKm }) if it's usable, else null.
+function loadPlace(key) {
   try {
-    const v = JSON.parse(localStorage.getItem(VIEW_KEY));
+    const v = JSON.parse(localStorage.getItem(key));
     if (v && Math.abs(v.lat) <= 85 && Math.abs(v.lon) <= 180 && v.rangeKm >= 1 && v.rangeKm <= MAX_RANGE_KM) {
       return { lat: v.lat, lon: v.lon, rangeKm: v.rangeKm };
     }
   } catch {
-    // No storage (private window, blocked site data): start at home.
+    // No storage (private window, blocked site data).
   }
-  return { ...HOME, rangeKm: DEFAULT_RANGE_KM };
+  return null;
+}
+
+function savePlace(key, place) {
+  try {
+    localStorage.setItem(key, JSON.stringify(place));
+  } catch {
+    // Not remembered.
+  }
 }
 
 // A smaller window (or a saved map from a bigger one) can't show as far out.
@@ -89,17 +101,11 @@ function clampZoom() {
   if (state.view.rangeKm > maxKm) state.view = { ...state.view, rangeKm: maxKm };
 }
 
-function saveView() {
-  try {
-    localStorage.setItem(VIEW_KEY, JSON.stringify(state.view));
-  } catch {
-    // Not remembered.
-  }
-}
+const saveView = () => savePlace(VIEW_KEY, state.view);
 
 // The scale is set at home's latitude, so dragging north or south keeps it.
 function currentView(rangeKm = state.view.rangeKm) {
-  return mapView(state.view, rangeKm, els.canvas.clientWidth, els.canvas.clientHeight, HOME.lat);
+  return mapView(state.view, rangeKm, els.canvas.clientWidth, els.canvas.clientHeight, state.home.lat);
 }
 
 // Once the map stops moving: remember it and fetch aircraft for what is shown.
@@ -113,12 +119,34 @@ function settle() {
 }
 
 els.home.addEventListener('click', () => {
-  state.view = { ...HOME, rangeKm: DEFAULT_RANGE_KM };
+  state.view = { ...state.home };
   zoomTarget = null;
   saveView();
   render();
   requestPoll();
 });
+
+// The map's middle and zoom become home. The range is converted so the map
+// keeps its scale (it's measured at home's latitude).
+els.setHome.addEventListener('click', () => {
+  const maxKm = maxRangeKm(els.canvas.clientWidth, els.canvas.clientHeight, MAX_RANGE_KM);
+  const lat = Number(state.view.lat.toFixed(4));
+  const lon = Number(state.view.lon.toFixed(4));
+  const rangeKm = Math.min(maxKm, roundRange(rangeAtLat(state.view.rangeKm, state.home.lat, lat)));
+  state.home = { lat, lon, rangeKm };
+  state.view = { ...state.home };
+  zoomTarget = null;
+  savePlace(HOME_KEY, state.home);
+  saveView();
+  if (state.data) state.data = fromHome(state.data); // distances from the new home
+  loadWeather(); // and its weather and time zone
+  render();
+});
+
+// "Set home" does nothing when the map already shows home at its zoom.
+function renderHomeButtons() {
+  els.setHome.disabled = state.view.rangeKm === state.home.rangeKm && centredOn(currentView(), state.home);
+}
 
 // The range changes smoothly while scrolling (the exact value is kept here, the
 // used one is rounded). The point under the mouse stays where it is.
@@ -279,8 +307,9 @@ let weatherController = null;
 async function loadWeather() {
   weatherController?.abort();
   const ctrl = (weatherController = new AbortController());
-  const { lat, lon } = HOME;
+  const { lat, lon } = state.home;
   state.weatherAt = Date.now();
+  if (state.weather && (state.weather.lat !== lat || state.weather.lon !== lon)) state.weather = null; // home moved
   renderWeather();
   try {
     const w = await fetchWeather(lat, lon, (url, opts) => fetch(url, { ...opts, signal: AbortSignal.any([opts.signal, ctrl.signal]) }));
@@ -432,7 +461,7 @@ function aircraftOnMap() {
 function fromHome(body) {
   const aircraft = body.aircraft.map((ac) => ({
     ...ac,
-    distKm: Number(distanceKm(HOME.lat, HOME.lon, ac.lat, ac.lon).toFixed(2)),
+    distKm: Number(distanceKm(state.home.lat, state.home.lon, ac.lat, ac.lon).toFixed(2)),
   }));
   aircraft.sort((a, b) => a.distKm - b.distKm);
   return { ...body, aircraft };
@@ -454,7 +483,7 @@ function drawCanvas() {
     width,
     height,
     center: state.view,
-    home: HOME,
+    home: state.home,
     aircraft: aircraftOnMap(),
     rangeKm: state.view.rangeKm,
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
@@ -642,6 +671,7 @@ function renderSelected() {
 function render() {
   renderSelected();
   drawCanvas();
+  renderHomeButtons();
   renderList();
   renderStatus();
 }
@@ -712,7 +742,8 @@ refreshSlow();
 
 // Old addresses carried ?lat=&lon=&range=; the map's position is in the browser now.
 if (window.location.search) history.replaceState(null, '', window.location.pathname);
-state.view = loadView();
+state.home = loadPlace(HOME_KEY) ?? { ...DEFAULT_HOME };
+state.view = loadPlace(VIEW_KEY) ?? { ...state.home };
 clampZoom();
 render();
 requestPoll();

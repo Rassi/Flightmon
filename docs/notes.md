@@ -45,6 +45,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-11-08 | Limits on asking the feeds (user asked whether roaming zoomed-out, e.g. to Lisbon, strains them; chose all three): (1) never two /api/aircraft requests within 5 s: moving the map, ↻, a new interval and returning to the tab ask for one "as soon as allowed", and one under way finishes first; (2) after a 429 (or the Worker's 502 when every feed answered 429) the next try waits 2 × the refresh interval, doubling up to 2 min, shown as "feeds busy, next try in N s"; a good answer resets it; (3) zoom-out stops where the feeds' 463 km still reach the map's corners (463 × shorter side / diagonal, 317 km on an 832×784 map), clamped again on resize. Panning anywhere stays allowed. Measured: 463 km around CPH = 185 aircraft, 50 KB, < 0.1 s; 73 km = 22 aircraft, 6 KB. Rules in `public/polling.js`. |
 | 2026-11-08 | No black while tiles load (user saw it flash when zooming out): a missing tile is drawn from what's already loaded for that spot, the nearest coarser tile up to 4 levels out (cropped, scaled up, blurry) and then sharper ones up to 2 levels in on top (e.g. the view before zooming out), like Leaflet / Google Maps. Only ground never loaded at any level stays empty until it arrives. Same for the rain layer (same code). Labels piling up when zoomed far out: user: fine as is for now. |
 | 2026-11-08 | Street map at 30% colour (`--map-saturation: 0.3`, a canvas `saturate()` filter on the tiles only): its orange/yellow roads clashed with the altitude colours. The user compared screenshots of three options (greyscale + dimmed, washed out, Esri Dark Gray + labels) and chose washed out. Not chosen: greyscale (`grayscale(1) brightness(0.75)`) and Esri's `Canvas/World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels (both checked keyless with CORS, real tiles, max zoom 16). |
+| 2026-11-08 | Home can be moved: a **Set home** button (plain, no confirmation, user's choice) makes the map's middle and zoom home, saved in the browser (`flightmon.home`, rounded to 4 decimals); greyed out while the map already shows home at its zoom. A grey crosshair marks the map's middle whenever it's more than 10 px from home (green dot). The dot, weather, clock (time zone) and Distance column follow home. Copenhagen is only the default; there's no "reset" (drag there and Set home). The range is converted when home moves north/south so the map keeps its scale (it's measured at home's latitude). Not chosen: right-click "Set home here" (hides the browser menu), double-click (means zoom on maps). |
 | 2026-11-08 | Laptop browser only for now: don't spend effort on phone widths. The phone step was dropped from the browser check; the existing narrow-screen CSS stays but isn't checked. |
 | 2026-11-08 | Refresh interval is a "Refresh" menu in the header (5 s, 10 s, 30 s, 1 min, 2 min), default **30 s** (was a fixed 5 s), remembered in the browser. Changing it fetches at once. "Stale" (status in red) after two missed refreshes: 2 × interval + 10 s. |
 | 2026-11-08 | A ↻ button next to the Refresh menu fetches at once, keeping recorded paths and the open details (F5 or "Show" would clear them); the next automatic update comes a full interval later. |
@@ -127,6 +128,9 @@ Open-Meteo, RainViewer, adsbdb, Esri tiles (real JPEG) and OpenSky via
 - The browser check records when the main page asks for aircraft (per page load) and fails if two requests are under 4.9 s apart. Its waits for "a fetch after moving the map" are 8 s now (up to 5 s gap + 0.4 s settle).
 - Zoomed out, other aircraft's labels lie over icons; the pixel check accepts a label's colour or outline when the point is in another aircraft's label box (6–120 px right, ±9 px).
 - 2026-11-08, once, not reproduced: "after a reload: list = the API's aircraft on the map" failed (22 of 25). The check now prints which aircraft differ, whether they're at the edge, and whether the answer it compared with was the latest. Suspect the known async `lastApi` race.
+- The browser check used to wait for "the next feed answer" after an action and compare with it; with a 5 s refresh that was often the answer to a request made *before* the action (old map position). It now waits for an answer whose centre is the expected map's middle. Same for the saved map position: wait for localStorage to change (the 0.4 s settle) rather than for any answer.
+- List order ties: the page sorts by distance rounded to 10 m and keeps its previous order for ties (aircraft parked side by side at the airport); the check accepts either order for those.
+- Open-Meteo answered 503 once (2026-11-08, back within a minute). The check now warns for Open-Meteo 429/5xx instead of failing (the page shows "Weather unavailable").
 - Save the browser check's output to a file (`> log 2>&1`) and grep it afterwards: filtering it live once hid which check failed and cost a re-run.
 - The browser check sets a 5 s refresh in its own browser storage (`addInitScript`, only if unset), so its timing steps stay short; `refresh` opens a fresh profile to check the 30 s default.
 - The browser check's groups share one page: the always-on steps 1–3 load Copenhagen at 50 km; `location` (6–9) moves it to the airport at 20 km, so it runs after the others. The location's time zone is read from Open-Meteo's answer in the always-on part, because both `weather` and `rain` need it.
@@ -182,16 +186,16 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 
 **Done**
 - Live aircraft (adsb.lol, adsb.fi fallback), refresh every 30 s by default (menu: 5 s to 2 min, remembered), and a ↻ button; never two requests within 5 s, longer waits after a 429, zoom-out capped where the feeds still cover the corners
-- Mouse-wheel zoom around the pointer, drag to move the map, Home (Copenhagen, 50 km); the map is remembered in the browser
-- Map filling the left section, north up, a dot at home (the circular radar with rings and compass was dropped 2026-11-08); ground traffic grey and unlabelled; emergencies red
+- Mouse-wheel zoom around the pointer, drag to move the map, Home, Set home (the map's middle and zoom; Copenhagen at 50 km by default); map and home remembered in the browser
+- Map filling the left section, north up, a green dot at home and a grey crosshair at the middle when away from it (the circular radar with rings and compass was dropped 2026-11-08); ground traffic grey and unlabelled; emergencies red
 - Street map (Esri), at 30% colour so it doesn't compete with the aircraft
-- List of the aircraft on the map, sorted by distance from Copenhagen (Distance column); hover a row to highlight the plane
+- List of the aircraft on the map, sorted by distance from home (Distance column); hover a row to highlight the plane
 - (Dropped 2026-11-08: typed/pasted/browser location, location in the URL, Direction column)
 - Colour by altitude, with legend
 - Aircraft-type icons (own drawings, static)
 - Click a plane for details, with route and airframe from adsbdb
 - Path flown by the selected aircraft (recorded since page open, plus OpenSky's history)
-- Clock (Copenhagen time + UTC) and weather (Open-Meteo, Copenhagen) in the header
+- Clock (home's time + UTC) and weather (Open-Meteo, at home) in the header
 - Rain radar overlay (RainViewer), switchable from the header
 
 **Candidates: fit a laptop browser, no key**
@@ -247,6 +251,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | Request limits: 5 s minimum gap, back-off after a 429, zoom-out cap. Unit tests for the rules (`polling.js`, `maxRangeKm`). Browser check: gap over the whole run, the cap, a faked 429 (next try ≥ 10 s later at a 5 s refresh, status says so). `--only=map,refresh,home` then `map,home` passed after fixing the status (it drew before planning the next try: "next try in 0 s") and teaching the pixel check about labels. |
 | 2026-11-08 | Tiles still loading are drawn from loaded coarser/sharper tiles instead of leaving the background (the black flash when zooming out). Unit test for the stand-ins; browser check `--only=map` failed on the old code (98% empty) and passed on the new (0%). |
 | 2026-11-08 | Street map at 30% colour. Unit test for the filter; browser check `--only=map` measures it on a synthetic tile. |
+| 2026-11-08 | Set home button and a grey crosshair at the map's middle. Unit tests for the scale conversion and "centred on home". Browser check step 10 (Set home); the check now waits for the answer for the expected map position (fixed several races), accepts tied distances in either order, and warns on Open-Meteo 503. `--only=map,home` then `home` and the always-on steps passed. |
 
 ## Open questions
 

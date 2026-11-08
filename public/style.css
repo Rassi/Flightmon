@@ -72,6 +72,7 @@ button {
 }
 button[type="submit"] { background: var(--accent); border-color: var(--accent); color: #04110d; font-weight: 600; }
 button:hover { filter: brightness(1.15); }
+button:disabled { opacity: 0.4; cursor: default; filter: none; }
 .muted { color: var(--muted); }
 
 /* Clock and weather, on the right of the header. */
