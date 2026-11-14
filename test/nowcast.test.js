@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  AHEAD_MIN, PAIR_MIN, estimateMotion, forecastHome, gridFromPixels, isPrecip, warningText,
+  AHEAD_MIN, NOTICE_QUIET_MIN, PAIR_MIN, estimateMotion, forecastHome, gridFromPixels, isPrecip, noticeStep, warningText,
 } from '../public/nowcast.js';
 
 const KM = 1.38; // a cell at Copenhagen
@@ -125,4 +125,33 @@ test('warning text', () => {
   assert.equal(warningText({ rainNow: true, endsAt: null }, now, clock), 'Raining at home');
   assert.equal(warningText({ rainNow: true, endsAt: min(41) }, now, clock), 'Raining at home, until ~14:30');
   assert.equal(warningText({ rainNow: true, endsAt: min(10) }, now, clock), '');
+});
+
+test('the notice: opens when a warning comes after a quiet spell, stays shut once dismissed', () => {
+  const min = (m) => T0 + m * 60000;
+  const step = (prev, m, active, known = true) => noticeStep(prev, { now: min(m), known, active });
+  // Never warned before: opens.
+  let n = step({ lastActive: 0, open: false }, 0, true);
+  assert.deepEqual(n, { lastActive: min(0), open: true });
+  // Still warning: stays open, the time moves on.
+  n = step(n, 1, true);
+  assert.deepEqual(n, { lastActive: min(1), open: true });
+  // Not known (loading, Rain off, stale radar): left as it is.
+  assert.equal(step(n, 2, false, false), n);
+  // Dismissed (as the page does), the warning still on: stays shut.
+  n = step({ ...n, open: false }, 5, true);
+  assert.equal(n.open, false);
+  // The warning goes and comes back within the quiet spell: no new notice.
+  n = step(n, 30, false);
+  n = step(n, 5 + NOTICE_QUIET_MIN - 1, true);
+  assert.equal(n.open, false);
+  // After a quiet spell longer than that: a new notice.
+  const quiet = n.lastActive;
+  n = step(n, (quiet - T0) / 60000 + NOTICE_QUIET_MIN + 1, true);
+  assert.equal(n.open, true);
+  // Open, and the warning goes (the rain passed by): it closes by itself.
+  n = step(n, 400, false);
+  assert.equal(n.open, false);
+  const same = { lastActive: 0, open: false };
+  assert.equal(step(same, 0, false), same, 'nothing to change, nothing saved');
 });

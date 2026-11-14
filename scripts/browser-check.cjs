@@ -85,6 +85,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   await context.addInitScript(() => {
     if (!localStorage.getItem('flightmon.refresh')) localStorage.setItem('flightmon.refresh', '5');
     if (!localStorage.getItem('flightmon.list')) localStorage.setItem('flightmon.list', 'open');
+    // A real rain warning's notice would cover the top of the map (the nowcast step checks it on a page of its own).
+    if (!localStorage.getItem('flightmon.rainNotice')) localStorage.setItem('flightmon.rainNotice', JSON.stringify({ lastActive: Date.now(), open: false }));
   });
   const page = await context.newPage();
   const errors = [];
@@ -583,7 +585,9 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     // west of home in the newest image. Its edge (35 km out) should reach home
     // about 34 min after that image, and the arrow come into home from the west.
     {
-      const np = await context.newPage();
+      // Fresh storage: no notice seen before.
+      const nctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+      const np = await nctx.newPage();
       let npList = null;
       np.on('response', (r) => { if (r.url().startsWith('https://api.rainviewer.com/')) npList = r.json().catch(() => null); });
       const SPEED = 60, AT_NEWEST = 50, R = 15;
@@ -630,13 +634,26 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const blue = hexToRgb('#4fc3ff');
       const px = await arrowPx();
       check(px.every((v, k) => Math.abs(v - blue[k]) <= 12), `arrow into home from the west, ${speed} km/h (pixel ${px} on its shaft)`);
+      // The first warning in a while also opens the notice over the map, until dismissed.
+      const notice = () => np.evaluate(() => ({ shown: !document.getElementById('rain-notice').hidden,
+        text: document.getElementById('rain-notice-text').textContent, detail: document.getElementById('rain-notice-detail').textContent,
+        stored: JSON.parse(localStorage.getItem('flightmon.rainNotice') || 'null') }));
+      let nt = await notice();
+      check(nt.shown && nt.text === text && /from W at \d+ km\/h/.test(nt.detail), `notice over the map: "${nt.text}" — "${nt.detail}"`);
       await np.screenshot({ path: OUT + '/rain-nowcast.png' });
+      await np.click('#rain-notice-close');
+      nt = await notice();
+      check(!nt.shown && nt.stored?.open === false, 'OK dismisses it');
+      await np.reload();
+      await np.waitForFunction(() => document.getElementById('rain-warning').textContent, null, { timeout: 20000 }).catch(() => {});
+      nt = await notice();
+      check(!nt.shown && (await np.textContent('#rain-warning')) === text, "after a reload: the warning is back, the dismissed notice isn't");
+      await np.waitForTimeout(500);
       await np.click('#rain-toggle');
       await np.waitForTimeout(300);
       const pxOff = await arrowPx();
       check((await np.textContent('#rain-warning')) === '' && !pxOff.every((v, k) => Math.abs(v - blue[k]) <= 12), 'Rain off: no warning, no arrow');
-      await np.evaluate(() => localStorage.setItem('flightmon.rain', 'on'));
-      await np.close();
+      await nctx.close();
     }
     // Leave the setting as found for the rest of the run (on).
   }

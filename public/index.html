@@ -38,6 +38,14 @@
     <section class="radar">
       <canvas id="radar" role="img" aria-label="Map of aircraft"></canvas>
       <button type="button" id="list-toggle" class="list-toggle" aria-controls="list" aria-expanded="false"></button>
+      <div id="rain-notice" class="rain-notice" role="alert" hidden>
+        <span class="rain-notice-icon" aria-hidden="true">☂</span>
+        <div>
+          <p id="rain-notice-text" class="rain-notice-text"></p>
+          <p id="rain-notice-detail" class="rain-notice-detail"></p>
+        </div>
+        <button type="button" id="rain-notice-close">OK</button>
+      </div>
       <p id="legend" class="legend" aria-label="Altitude colours"></p>
       <div class="corner">
         <div class="zoom">

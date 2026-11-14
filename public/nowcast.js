@@ -181,6 +181,18 @@ export function forecastHome(grid, motion, frameTime) {
   return out;
 }
 
+// The bigger notice over the map: it opens when a warning comes after at least
+// NOTICE_QUIET_MIN without one (or the first time), and stays until dismissed
+// or the warning goes. `prev`: { lastActive (ms, when a warning was last
+// shown), open }. `known`: whether there's a forecast to go by (none while
+// it's loading, with Rain off or a stale radar), so it isn't closed for that.
+export const NOTICE_QUIET_MIN = 120;
+export function noticeStep(prev, { now, known, active }) {
+  if (!known) return prev;
+  if (!active) return prev.open ? { ...prev, open: false } : prev;
+  return { lastActive: now, open: prev.open || now - prev.lastActive > NOTICE_QUIET_MIN * 60000 };
+}
+
 const FIVE_MIN = 5 * 60000;
 const round5 = (ms) => Math.round(ms / FIVE_MIN) * FIVE_MIN;
 

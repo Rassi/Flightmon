@@ -3,7 +3,7 @@ import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { fetchPhoto } from './photo.js';
 import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainGridAt, rainListDue, rainReady } from './rain.js';
-import { PAIR_MIN, estimateMotion, forecastHome, warningText } from './nowcast.js';
+import { PAIR_MIN, estimateMotion, forecastHome, noticeStep, warningText } from './nowcast.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
 import { delayMs, isRateLimited, nextBackoffS } from './polling.js';
@@ -26,6 +26,7 @@ const MAX_RANGE_KM = 463; // the feeds' limit
 const VIEW_KEY = 'flightmon.view'; // where the map was left: { lat, lon, rangeKm }
 const RAIN_KEY = 'flightmon.rain';
 const LIST_KEY = 'flightmon.list'; // 'open' while the user keeps the list open
+const NOTICE_KEY = 'flightmon.rainNotice'; // { lastActive, open }: see noticeStep
 const KEEP_IN_VIEW_PX = 80; // a clicked aircraft (and its label) stays this far inside the map when the list opens
 const WEATHER_REFRESH_MS = 15 * 60 * 1000; // Open-Meteo's current values change every 15 min
 const RAIN_STALE_S = 30 * 60;
@@ -54,6 +55,10 @@ const els = {
   rainStatus: $('rain-status'),
   rainPlay: $('rain-play'),
   rainWarning: $('rain-warning'),
+  rainNotice: $('rain-notice'),
+  rainNoticeText: $('rain-notice-text'),
+  rainNoticeDetail: $('rain-notice-detail'),
+  rainNoticeClose: $('rain-notice-close'),
   legend: $('legend'),
   details: $('details'),
   status: $('status'),
@@ -542,7 +547,43 @@ function renderRainWarning() {
   els.rainWarning.textContent = text;
   els.rainWarning.title = title;
   els.rainWarning.classList.toggle('unavailable', Boolean(unavailable));
+  renderRainNotice(cast, unavailable ? '' : text);
 }
+
+// The bigger notice: kept in the browser, so a reload neither brings back a
+// dismissed one nor loses an open one.
+let notice = { lastActive: 0, open: false };
+try {
+  notice = { ...notice, ...JSON.parse(localStorage.getItem(NOTICE_KEY)) };
+} catch {
+  // None yet.
+}
+
+function saveNotice(next) {
+  if (next === notice) return;
+  notice = next;
+  try {
+    localStorage.setItem(NOTICE_KEY, JSON.stringify(notice));
+  } catch {
+    // Not remembered.
+  }
+}
+
+function renderRainNotice(cast, text) {
+  saveNotice(noticeStep(notice, { now: Date.now(), known: Boolean(cast), active: Boolean(text) }));
+  const shown = notice.open && Boolean(cast) && Boolean(text);
+  els.rainNotice.hidden = !shown;
+  if (!shown) return;
+  els.rainNoticeText.textContent = text;
+  const m = cast.motion;
+  els.rainNoticeDetail.textContent = (m?.speedKmh ? `Rain moving from ${compass(m.fromDeg)} at ${Math.round(m.speedKmh)} km/h. ` : '') +
+    'From the rain radar; showers that form or fade on the way aren\'t foreseen.';
+}
+
+els.rainNoticeClose.addEventListener('click', () => {
+  saveNotice({ ...notice, open: false });
+  els.rainNotice.hidden = true;
+});
 
 const isRainStale = () => !newestRain() || Date.now() / 1000 - newestRain().time > RAIN_STALE_S;
 
