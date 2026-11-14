@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { FRAMES_URL, drawRain, fetchFrames, latestFrame, rainListDue, rainReady, rainTileUrl, rainZoom, recentFrames } from '../public/rain.js';
+import {
+  FRAMES_URL, RADAR_LAG_MIN, drawRain, fetchFrames, latestFrame, radarTime, rainListDue, rainReady, rainTileUrl, rainZoom, recentFrames,
+} from '../public/rain.js';
 import { makeView, worldPixel } from '../public/mercator.js';
 
 // RainViewer's list of radar images, 2026-10-31.
@@ -133,4 +135,9 @@ test('asking for the list again: just after the next image is due, then each min
   assert.equal(due('15:22:00', '15:17:00', '14:40:00'), true);
   // First load: never asked.
   assert.equal(rainListDue({ now: t('14:50:00'), lastAt: 0, newestTime: undefined, failed: false }), true);
+});
+
+test("the radar saw an image about 20 min before RainViewer's label (over Denmark, 2026-11-14)", () => {
+  assert.equal(RADAR_LAG_MIN, 20);
+  assert.equal(radarTime({ time: 1793458200 }), 1793458200 - 1200); // labelled 16:30 → about 16:10
 });

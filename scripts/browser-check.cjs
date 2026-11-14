@@ -419,7 +419,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
 
   if (!want('rain')) skipped('3d', 'rain'); else {
     console.log('3d. Rain radar (RainViewer)');
-    await page.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => /Radar ~\d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(1500);
     const list = rainLists.length ? await rainLists[rainLists.length - 1].json : null;
     const frame = list?.radar?.past?.at(-1);
@@ -427,8 +427,12 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(await page.getAttribute('#rain-toggle', 'aria-pressed') === 'true', 'rain is on by default');
     const status = await page.textContent('#rain-status');
     const tz = liveTz || 'UTC';
-    const frameTime = frame && new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(frame.time * 1000));
-    check(status.startsWith(`Radar ${frameTime}`), `status shows the image time: "${status}"`);
+    // About when the radar saw it: 20 min before RainViewer's label (public/rain.js, RADAR_LAG_MIN).
+    const frameTime = frame && new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date((frame.time - 1200) * 1000));
+    const labelTime = frame && new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(frame.time * 1000));
+    check(status.startsWith(`Radar ~${frameTime}`), `status shows the radar's time, 20 min before the label: "${status}"`);
+    const statusTitle = await page.getAttribute('#rain-status', 'title');
+    check(statusTitle?.includes(`labelled ${labelTime}`), `its tooltip gives RainViewer's label: "${statusTitle}"`);
     const zooms = [...new Set(rainTiles.map((t) => Number(t.url.match(/\/512\/(\d+)\//)?.[1])))];
     // The overlay's, and the nowcast's of the newest image and the one 20 min before.
     const pair = list?.radar?.past?.find((f) => f.time === frame?.time - 1200);
@@ -474,7 +478,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     await rp.route('https://api.open-meteo.com/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: recordedWeather }));
     await rp.route('**/api/aircraft*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ now: Date.now(), source: 'test', center: { ...center, radiusKm: 50 }, aircraft: [] }) }));
     await rp.goto(BASE + '/');
-    await rp.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
+    await rp.waitForFunction(() => /Radar ~\d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
     await rp.waitForTimeout(3000); // map and rain tiles
     {
       // Weather display and the location's clock, from the recorded Open-Meteo answer (Copenhagen, 12.3 °C, overcast).
@@ -486,8 +490,8 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       check([now - 1500, now - 500, now].map(cph).includes(t) && /^CES?T$/.test(zone), `clock switches to the location's zone: ${t} ${zone} (Copenhagen now ${cph(now)})`);
       check([now, now - 1000].some((ms) => utc === `· ${new Date(ms).toISOString().slice(11, 16)} UTC`), `and UTC beside it: "${utc}"`);
       const st = await rp.textContent('#rain-status');
-      const rt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(frame.time * 1000));
-      check(st.startsWith(`Radar ${rt}`), `radar time in the location's zone too: "${st}"`);
+      const rt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date((frame.time - 1200) * 1000));
+      check(st.startsWith(`Radar ~${rt}`), `radar time in the location's zone too: "${st}"`);
       await rp.screenshot({ path: OUT + '/weather.png', clip: { x: 0, y: 0, width: 1440, height: 70 } });
     }
     const dimsR = await rp.$eval('#radar', (c) => ({ w: c.clientWidth, h: c.clientHeight }));
@@ -531,7 +535,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const afterReload = await sample();
     check(afterReload.every((c, i) => c.every((v, k) => Math.abs(v - off[i][k]) <= 2)), 'after the reload no rain is drawn');
     await rp.click('#rain-toggle');
-    await rp.waitForFunction(() => /Radar \d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
+    await rp.waitForFunction(() => /Radar ~\d\d:\d\d/.test(document.querySelector('#rain-status').textContent), null, { timeout: 15000 });
     await rp.waitForTimeout(1500);
     const again = await sample();
     check(again.every((c, i) => c.every((v, k) => Math.abs(v - on[i][k]) <= 2)), 'switched on again: drawn as before');
@@ -571,7 +575,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(await rp.$eval('#rain-play', (b) => b.textContent === '■' && b.getAttribute('aria-pressed') === 'true'), 'playing: the button shows ■');
     await rp.click('#rain-play');
     const stopped = await rp.textContent('#rain-status');
-    check(stopped === `Radar ${new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(hour.at(-1).time * 1000))}`
+    check(stopped === `Radar ~${new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date((hour.at(-1).time - 1200) * 1000))}`
       && (await rp.textContent('#rain-play')) === '▶' && near(await sample(), on), `■ stops at the newest image: "${stopped}"`);
     await rp.click('#rain-play');
     await rp.waitForTimeout(1500);
@@ -619,7 +623,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       const text = await np.textContent('#rain-warning');
       const title = await np.getAttribute('#rain-warning', 'title');
       const hhmm = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
-      const expect = newest + 34 * 60000;
+      const expect = newest - 20 * 60000 + 34 * 60000; // the radar saw it 20 min before RainViewer's label
       const ok = [-2, -1, 0, 1, 2].map((k) => `Rain at home from ~${hhmm(Math.round(expect / 300000) * 300000 + k * 300000)}`);
       check(expect - Date.now() < 150000 ? text === 'Rain at home about now' : ok.slice(1, 4).includes(text),
         `warning: "${text}" (shower due about ${hhmm(expect)}, newest image ${hhmm(newest)})`);

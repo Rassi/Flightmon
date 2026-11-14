@@ -20,6 +20,13 @@ const TIMEOUT_MS = 8000;
 
 export const PLAY_MINUTES = 60; // how far back the loop goes
 
+// RainViewer labels an image with when it put it together, from radar data
+// that's older: over Denmark about 20 min older (2026-11-14, against DMI's
+// own radar). Times shown and forecast are moved back by this much. It was
+// measured once; it may vary.
+export const RADAR_LAG_MIN = 20;
+export const radarTime = (frame) => frame.time - RADAR_LAG_MIN * 60; // s
+
 // When to ask for the list again. A new image comes every 10 min, listed from
 // a few seconds to about 5 min after its time (seen 2026-11-14: 14:50 at
 // 14:50:22, 14:00 by 14:05:30). So: just after the next one is due, then each

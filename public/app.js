@@ -2,7 +2,9 @@ import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.j
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { fetchPhoto } from './photo.js';
-import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainGridAt, rainListDue, rainReady } from './rain.js';
+import {
+  PLAY_MINUTES, RADAR_LAG_MIN, RAIN_CREDIT, drawRain, fetchFrames, radarTime, rainGridAt, rainListDue, rainReady,
+} from './rain.js';
 import { PAIR_MIN, estimateMotion, forecastHome, noticeStep, warningText } from './nowcast.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
@@ -399,7 +401,8 @@ async function runNowcast() {
     const [a, b] = await Promise.all([rainGridAt(older, home), rainGridAt(newer, home)]);
     if (key !== nowcastKey) return; // a newer image or home since
     const motion = estimateMotion(a, b, PAIR_MIN);
-    state.nowcast = { ...forecastHome(b, motion, newer.time * 1000), motion, from: older.time, to: newer.time };
+    // Times from when the radar saw the rain, not RainViewer's label.
+    state.nowcast = { ...forecastHome(b, motion, radarTime(newer) * 1000), motion, from: radarTime(older), to: radarTime(newer) };
     state.nowcastError = null;
   } catch (err) {
     if (key !== nowcastKey) return;
@@ -504,8 +507,9 @@ function renderRain() {
   if (state.rainOn) {
     const frame = shownRain();
     if (frame) {
-      const { time } = clockParts(new Date(frame.time * 1000), state.weather?.timeZone);
-      text = `Radar ${time.slice(0, 5)}`;
+      // About when the radar saw it (see RADAR_LAG_MIN), hence the ~.
+      const { time } = clockParts(new Date(radarTime(frame) * 1000), state.weather?.timeZone);
+      text = `Radar ~${time.slice(0, 5)}`;
       const ago = Math.round((newestRain().time - frame.time) / 60);
       if (ago > 0) text += ` (−${ago} min)`;
       problem = Date.now() / 1000 - newestRain().time > RAIN_STALE_S;
@@ -518,6 +522,10 @@ function renderRain() {
     }
   }
   els.rainStatus.textContent = text;
+  els.rainStatus.title = state.rainOn && shownRain()
+    ? `RainViewer's image labelled ${clockParts(new Date(shownRain().time * 1000), state.weather?.timeZone).time.slice(0, 5)}; ` +
+      `its radar runs about ${RADAR_LAG_MIN} min behind its labels (measured over Denmark), so the time shown is that much earlier.`
+    : '';
   els.rainStatus.classList.toggle('error', problem);
   renderRainWarning();
   renderAttribution();
@@ -532,7 +540,7 @@ function renderRainWarning() {
   let title = '';
   if (cast) {
     const m = cast.motion;
-    title = `From the radar images ${clock(cast.from * 1000)}–${clock(cast.to * 1000)}: ` +
+    title = `From the radar images of about ${clock(cast.from * 1000)}–${clock(cast.to * 1000)}: ` +
       (m?.speedKmh ? `rain moving from ${compass(m.fromDeg)} at ${Math.round(m.speedKmh)} km/h.` +
         (cast.startsAt || cast.endsAt ? '' : ` No change at home for ${cast.aheadMin} min after the newest image.`)
         : m ? 'the rain is standing still.'
