@@ -2,7 +2,7 @@ import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.j
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { fetchPhoto } from './photo.js';
-import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainGridAt, rainReady } from './rain.js';
+import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainGridAt, rainListDue, rainReady } from './rain.js';
 import { PAIR_MIN, estimateMotion, forecastHome, warningText } from './nowcast.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
@@ -28,7 +28,6 @@ const RAIN_KEY = 'flightmon.rain';
 const LIST_KEY = 'flightmon.list'; // 'open' while the user keeps the list open
 const KEEP_IN_VIEW_PX = 80; // a clicked aircraft (and its label) stays this far inside the map when the list opens
 const WEATHER_REFRESH_MS = 15 * 60 * 1000; // Open-Meteo's current values change every 15 min
-const RAIN_REFRESH_MS = 5 * 60 * 1000; // a new radar image every 10 min
 const RAIN_STALE_S = 30 * 60;
 const RAIN_STEP_MS = 500; // each image of the loop
 const RAIN_HOLD_MS = 1500; // the newest, before starting over
@@ -407,11 +406,13 @@ async function runNowcast() {
   drawCanvas();
 }
 
-// Weather and rain change slowly: refresh them when due, and not in a background tab.
+// Weather and rain change slowly: refresh them when due (checked each minute),
+// and not in a background tab. The radar list just after each new image is due.
 function refreshSlow() {
   if (document.hidden) return;
-  if (Date.now() - state.weatherAt > WEATHER_REFRESH_MS) loadWeather();
-  if (state.rainOn && Date.now() - state.rainAt > RAIN_REFRESH_MS) loadRain();
+  const now = Date.now();
+  if (now - state.weatherAt > WEATHER_REFRESH_MS) loadWeather();
+  if (state.rainOn && rainListDue({ now, lastAt: state.rainAt, newestTime: newestRain()?.time, failed: Boolean(state.rainError) })) loadRain();
 }
 
 function setRain(on) {

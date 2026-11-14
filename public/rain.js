@@ -20,6 +20,24 @@ const TIMEOUT_MS = 8000;
 
 export const PLAY_MINUTES = 60; // how far back the loop goes
 
+// When to ask for the list again. A new image comes every 10 min, listed from
+// a few seconds to about 5 min after its time (seen 2026-11-14: 14:50 at
+// 14:50:22, 14:00 by 14:05:30). So: just after the next one is due, then each
+// minute until it's there. Every 5 min after a failure, or while RainViewer
+// seems stuck (newest image over 30 min old). Never twice within 50 s.
+const STEP_MS = 10 * 60 * 1000;
+const DUE_AFTER_MS = 20 * 1000;
+const MIN_GAP_MS = 50 * 1000; // under the minute check's interval, which can fire a little early
+const SLOW_MS = 5 * 60 * 1000;
+const STUCK_MS = 30 * 60 * 1000;
+
+export function rainListDue({ now, lastAt, newestTime, failed }) {
+  if (now - lastAt < MIN_GAP_MS) return false;
+  const newest = newestTime * 1000;
+  if (failed || !newestTime || now - newest > STUCK_MS) return now - lastAt >= SLOW_MS;
+  return now >= newest + STEP_MS + DUE_AFTER_MS;
+}
+
 // The radar images of the last `minutes` before the newest, oldest first:
 // [{ host, path, time (s) }]; empty if there are none.
 export function recentFrames(body, minutes = PLAY_MINUTES) {

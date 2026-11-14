@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { FRAMES_URL, drawRain, fetchFrames, latestFrame, rainReady, rainTileUrl, rainZoom, recentFrames } from '../public/rain.js';
+import { FRAMES_URL, drawRain, fetchFrames, latestFrame, rainListDue, rainReady, rainTileUrl, rainZoom, recentFrames } from '../public/rain.js';
 import { makeView, worldPixel } from '../public/mercator.js';
 
 // RainViewer's list of radar images, 2026-10-31.
@@ -108,4 +108,29 @@ test('an image is ready once all its tiles for the view have finished, loaded or
   mine[0].complete = true; // failed: complete, no pixels; don't wait for it forever
   assert.equal(rainReady(view, frame, { dpr: 2, onLoad: () => {} }), true);
   assert.equal(made.length, mine.length, 'no new requests once asked');
+});
+
+test('asking for the list again: just after the next image is due, then each minute until it comes', () => {
+  const t = (hhmmss) => Date.UTC(2026, 10, 14, ...hhmmss.split(':').map(Number)); // ms
+  const at = (hhmmss) => t(hhmmss) / 1000; // s, as RainViewer gives image times
+  const due = (now, lastAt, newest, failed = false) => rainListDue({ now: t(now), lastAt: t(lastAt), newestTime: newest && at(newest), failed });
+  // Newest 14:40, asked 14:47: not again until 14:50:20.
+  assert.equal(due('14:50:00', '14:47:00', '14:40:00'), false);
+  assert.equal(due('14:50:20', '14:47:00', '14:40:00'), true);
+  // The 14:50 image not listed yet at 14:50:20: again a minute later, not sooner.
+  assert.equal(due('14:51:00', '14:50:20', '14:40:00'), false);
+  assert.equal(due('14:51:20', '14:50:20', '14:40:00'), true);
+  // Once it's there, quiet until 15:00:20 (the old rule asked every 5 min).
+  assert.equal(due('14:56:00', '14:51:20', '14:50:00'), false);
+  assert.equal(due('15:00:20', '14:51:20', '14:50:00'), true);
+  // After a failure, or with no list yet: every 5 min.
+  assert.equal(due('14:54:00', '14:50:20', '14:40:00', true), false);
+  assert.equal(due('14:55:20', '14:50:20', '14:40:00', true), true);
+  assert.equal(due('14:51:00', '14:50:00', null), false);
+  assert.equal(due('14:55:00', '14:50:00', null), true);
+  // RainViewer stuck (newest over 30 min old): every 5 min, not every minute.
+  assert.equal(due('15:20:00', '15:17:00', '14:40:00'), false);
+  assert.equal(due('15:22:00', '15:17:00', '14:40:00'), true);
+  // First load: never asked.
+  assert.equal(rainListDue({ now: t('14:50:00'), lastAt: 0, newestTime: undefined, failed: false }), true);
 });
