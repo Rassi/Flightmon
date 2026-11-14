@@ -8,6 +8,7 @@
 // 1–3). The rest are groups; --only runs just those (the full run asks the
 // flight feeds for a lot, and they answer 429 when asked too often):
 //   map (3b), weather (3c), rain (3d), refresh (4), hover (5), details (5b),
+//   list (5c: the aircraft list closed by default, its button, opening for a clicked aircraft; made-up aircraft, no feeds),
 //   home (6–10: the map remembered after a reload and in a new tab, the Home button, feed failure, back-off after a 429, Set home)
 // The main pages run with a 5 s refresh (set in their browser storage) so the
 // timing checks don't take minutes; `refresh` checks the 30 s default in a fresh profile.
@@ -33,7 +34,7 @@ const { chromium } = require('playwright');
 const BASE = process.env.FLIGHTMON_URL || 'http://127.0.0.1:8787';
 const args = process.argv.slice(2);
 const OUT = args.find((a) => !a.startsWith('--')) || os.tmpdir();
-const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'home'];
+const GROUPS = ['map', 'weather', 'rain', 'refresh', 'hover', 'details', 'list', 'home'];
 const HOME = { lat: 55.6761, lon: 12.5683 }; // Copenhagen, the page's home
 const AT_HOME = { center: HOME, range: 50 }; // the page's default map
 const onlyArg = args.find((a) => a.startsWith('--only='));
@@ -79,8 +80,12 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   const proxy = process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined;
   const browser = await chromium.launch({ proxy });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
-  // 5 s refresh for this run unless a step chose another (the page's default is 30 s).
-  await context.addInitScript(() => { if (!localStorage.getItem('flightmon.refresh')) localStorage.setItem('flightmon.refresh', '5'); });
+  // 5 s refresh for this run unless a step chose another (the page's default is 30 s),
+  // and the aircraft list open (closed by default; the `list` group checks that).
+  await context.addInitScript(() => {
+    if (!localStorage.getItem('flightmon.refresh')) localStorage.setItem('flightmon.refresh', '5');
+    if (!localStorage.getItem('flightmon.list')) localStorage.setItem('flightmon.list', 'open');
+  });
   const page = await context.newPage();
   const errors = [];
   page.on('console', (m) => {
@@ -103,7 +108,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   });
   let injecting = false; // steps 8 and 9 fake feed failures
   const asked = [[]]; // times of /api/aircraft requests, one list per page load
-  page.on('request', (r) => { if (r.url().includes('/api/aircraft')) asked.at(-1).push(Date.now()); });
+  // The browser's own start time: Node hears of requests late while it's busy with another page.
+  const stamp = (r) => { if (r.url().includes('/api/aircraft')) asked.at(-1).push(r.timing().startTime); };
+  page.on('requestfinished', stamp);
+  page.on('requestfailed', stamp);
   page.on('framenavigated', (f) => { if (f === page.mainFrame()) asked.push([]); });
   page.on('response', async (r) => {
     if (!r.url().includes('/api/aircraft') || r.status() !== 502 || injecting) return;
@@ -876,6 +884,89 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     page.off('response', onResp);
   }
 
+  if (!want('list')) skipped('5c', 'list'); else {
+    console.log('5c. Aircraft list beside the map');
+    // A page of its own, fresh storage, three made-up aircraft around Copenhagen:
+    // A 20 km west, C 10 km north, B 75 km east (on the full-width map, off it once the list takes its room).
+    const lc = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+    await lc.addInitScript(() => { if (!localStorage.getItem('flightmon.rain')) localStorage.setItem('flightmon.rain', 'off'); });
+    const lp = await lc.newPage();
+    const kmLon = 111.32 * Math.cos(HOME.lat * Math.PI / 180);
+    const fake = (hex, callsign, east, north) => ({ hex, callsign, reg: null, type: 'A320', category: 'A3', lat: HOME.lat + north / 111.2, lon: HOME.lon + east / kmLon,
+      onGround: false, altM: 3000, speedKmh: 500, trackDeg: 90, vrateMs: 0, squawk: null, emergency: null, seenPosS: 1, distKm: 0, bearingDeg: 0 });
+    const A = fake('aaaaa1', 'TEST1', -20, 0), B = fake('bbbbb2', 'TEST2', 75, 0), C = fake('ccccc3', 'TEST3', 0, 10);
+    await lp.route('**/api/aircraft*', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ now: Date.now(), source: 'test', center: { ...HOME, radiusKm: 120 }, aircraft: [A, B, C] }) }));
+    await lp.route('**/api/track*', (r) => r.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"test"}' }));
+    await lp.route('https://api.adsbdb.com/**', (r) => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"response":"unknown aircraft"}' }));
+    await lp.route('https://api.planespotters.net/**', (r) => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{"photos":[]}' }));
+    const recordedW = require('node:fs').readFileSync(require('node:path').join(__dirname, '../test/fixtures/openmeteo-cph.json'));
+    await lp.route('https://api.open-meteo.com/**', (r) => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: recordedW }));
+    await lp.goto(BASE + '/');
+    await lp.waitForFunction(() => /3 aircraft/.test(document.getElementById('list-toggle').textContent), null, { timeout: 10000 }).catch(() => {});
+    const layout = () => lp.evaluate(() => {
+      const c = document.getElementById('radar').getBoundingClientRect();
+      const m = document.querySelector('main').getBoundingClientRect();
+      return { x: c.x, y: c.y, w: c.width, h: c.height, main: m.width, listHidden: document.getElementById('list').hidden,
+        button: document.getElementById('list-toggle').textContent, expanded: document.getElementById('list-toggle').getAttribute('aria-expanded'),
+        details: !document.getElementById('details').hidden && document.querySelector('#details h2')?.textContent,
+        stored: localStorage.getItem('flightmon.list'), view: JSON.parse(localStorage.getItem('flightmon.view') || 'null') };
+    });
+    const clickAc = async (a, L) => { const p = expectedXY(a, L.view ?? HOME, 50, L.w, L.h, HOME.lat); await lp.mouse.click(L.x + p.x, L.y + p.y); return p; };
+    let L = await layout();
+    check(L.listHidden && Math.abs(L.w - (L.main - 32)) <= 1 && L.button === '‹ 3 aircraft' && L.expanded === 'false',
+      `closed by default: the map takes the width (${L.w} of ${L.main} px), button "${L.button}"`);
+    await lp.screenshot({ path: OUT + '/list-closed.png' });
+    const full = L;
+
+    // Clicking an aircraft opens the list with its details; closing them closes it.
+    await clickAc(A, L);
+    await lp.waitForTimeout(300);
+    L = await layout();
+    check(!L.listHidden && L.w < full.w - 300 && L.details === 'TEST1' && L.button === 'Hide list ›' && L.stored === null,
+      `click an aircraft: list opens with its details (${L.details}), map ${L.w} px; not remembered as opened`);
+    await lp.keyboard.press('Escape');
+    await lp.waitForTimeout(200);
+    L = await layout();
+    check(L.listHidden && Math.abs(L.w - full.w) <= 1, 'Esc closes the details and the list with them');
+
+    // B sits where the list goes: the map moves just enough to keep it in sight.
+    const before = await clickAc(B, L);
+    await lp.waitForTimeout(700); // the moved map is saved once it settles
+    L = await layout();
+    const bNow = expectedXY(B, L.view ?? HOME, 50, L.w, L.h, HOME.lat);
+    check(full.w - before.x > 40 && before.x > L.w && !L.listHidden && L.details === 'TEST2' && bNow.x >= 78 && bNow.x <= L.w - 78 && Math.abs(bNow.y - before.y) < 2,
+      `an aircraft where the list opens (x ${before.x.toFixed(0)} of ${full.w}) stays in sight: x ${bNow.x.toFixed(0)} of ${L.w} px`);
+    await lp.screenshot({ path: OUT + '/list-open-selected.png' });
+    // Closing with the button closes the details too.
+    await lp.click('#list-toggle');
+    await lp.waitForTimeout(200);
+    L = await layout();
+    check(L.listHidden && !L.details && L.stored === 'closed', '"Hide list" with details open closes both');
+
+    // Opened with the button: remembered, and it stays open when details close.
+    await lp.click('#list-toggle');
+    await lp.waitForTimeout(200);
+    L = await layout();
+    check(!L.listHidden && L.stored === 'open' && (await lp.$$('#aircraft tbody tr')).length > 0, 'the button opens the list and it\'s remembered');
+    await lp.click('#aircraft tbody tr[data-hex="ccccc3"]');
+    await lp.waitForSelector('#details:not([hidden]) h2');
+    await lp.keyboard.press('Escape');
+    await lp.waitForTimeout(200);
+    L = await layout();
+    check(!L.listHidden && !L.details, 'opened by the user: it stays open when the details close');
+    await lp.reload();
+    await lp.waitForTimeout(1500);
+    L = await layout();
+    check(!L.listHidden && L.button === 'Hide list ›', 'still open after a reload');
+    await lp.click('#list-toggle');
+    await lp.waitForTimeout(200);
+    await lp.reload();
+    await lp.waitForTimeout(1500);
+    L = await layout();
+    check(L.listHidden && L.stored === 'closed', 'and closed after closing it and reloading');
+    await lc.close();
+  }
+
   if (!want('home')) skipped('6–10', 'home'); else {
     console.log('6. The map is remembered: after a reload and in a new tab');
     const rect = await page.$eval('#radar', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y, w: c.clientWidth, h: c.clientHeight }; });
@@ -975,7 +1066,7 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   }
 
   {
-    const gaps = asked.flatMap((ts) => ts.slice(1).map((t, i) => t - ts[i]));
+    const gaps = asked.map((ts) => [...ts].sort((a, b) => a - b)).flatMap((ts) => ts.slice(1).map((t, i) => t - ts[i]));
     const min = gaps.length ? Math.min(...gaps) : null;
     check(min === null || min >= 4900, `never two aircraft requests within 5 s (${gaps.length + asked.filter((ts) => ts.length).length} requests, closest ${min === null ? '–' : (min / 1000).toFixed(1) + ' s'} apart)`);
   }
@@ -984,5 +1075,6 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
   const warned = warnings.length ? ` (${warnings.length} warning${warnings.length > 1 ? 's' : ''}: ${[...new Set(warnings)].join(' | ')})` : '';
   const ran = only ? ` [core + ${only.join(', ')}]` : '';
   console.log((failures ? `\n${failures} FAILED` : '\nALL PASSED') + ran + warned);
-  process.exit(failures ? 1 : 0);
-})().catch((e) => { console.error(e); process.exit(2); });
+  // exitCode rather than exit(): exit() can drop output still on its way down a pipe.
+  process.exitCode = failures ? 1 : 0;
+})().catch((e) => { console.error(e); process.exitCode = 2; });

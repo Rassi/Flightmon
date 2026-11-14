@@ -25,6 +25,8 @@ const HOME_KEY = 'flightmon.home'; // { lat, lon, rangeKm }
 const MAX_RANGE_KM = 463; // the feeds' limit
 const VIEW_KEY = 'flightmon.view'; // where the map was left: { lat, lon, rangeKm }
 const RAIN_KEY = 'flightmon.rain';
+const LIST_KEY = 'flightmon.list'; // 'open' while the user keeps the list open
+const KEEP_IN_VIEW_PX = 80; // a clicked aircraft (and its label) stays this far inside the map when the list opens
 const WEATHER_REFRESH_MS = 15 * 60 * 1000; // Open-Meteo's current values change every 15 min
 const RAIN_REFRESH_MS = 5 * 60 * 1000; // a new radar image every 10 min
 const RAIN_STALE_S = 30 * 60;
@@ -39,6 +41,9 @@ const els = {
   zoomIn: $('zoom-in'),
   zoomOut: $('zoom-out'),
   canvas: $('radar'),
+  main: document.querySelector('main'),
+  list: $('list'),
+  listToggle: $('list-toggle'),
   attribution: $('attribution'),
   clockTime: $('clock-time'),
   clockZone: $('clock-zone'),
@@ -73,6 +78,7 @@ const state = {
   weatherError: null,
   weatherAt: 0, // when it was last asked for
   rainOn: true,
+  listOpen: false, // the user opened the list (it also shows while an aircraft is selected)
   rainFrames: [], // the last hour's radar images, oldest first: [{ host, path, time }]
   rainPlaying: false, // looping through them
   rainShown: null, // time of the image shown while playing (null: the newest)
@@ -709,6 +715,64 @@ function renderList() {
 function showStatus(text, isError = false) {
   els.status.textContent = text;
   els.status.classList.toggle('error', isError);
+  renderListToggle();
+}
+
+// --- the aircraft list beside the map ---------------------------------------
+// Closed by default, so the map has the whole width. The button at the map's
+// top right opens it (and is remembered); clicking an aircraft opens it for
+// the details, and closing those closes it again unless the user had opened it.
+
+const listShown = () => state.listOpen || Boolean(state.selected);
+
+function renderListPanel() {
+  const shown = listShown();
+  els.list.hidden = !shown;
+  els.main.classList.toggle('list-closed', !shown);
+  renderListToggle();
+}
+
+// Closed, the button stands in for the list's status line: the count, and
+// in amber with the status as its tooltip when something is wrong.
+function renderListToggle() {
+  const shown = listShown();
+  const problem = els.status.classList.contains('error');
+  els.listToggle.setAttribute('aria-expanded', String(shown));
+  els.listToggle.textContent = shown ? 'Hide list ›' : `‹ ${state.data ? `${aircraftOnMap().length} aircraft` : 'Aircraft'}`;
+  els.listToggle.title = shown ? 'Hide the aircraft list' : `Show the aircraft list. ${els.status.textContent}`;
+  els.listToggle.classList.toggle('error', !shown && problem);
+}
+
+function setListOpen(open) {
+  state.listOpen = open;
+  try {
+    localStorage.setItem(LIST_KEY, open ? 'open' : 'closed');
+  } catch {
+    // Not remembered.
+  }
+}
+
+els.listToggle.addEventListener('click', () => {
+  if (listShown()) {
+    setListOpen(false);
+    if (state.selected) deselect(); // the details go with the list
+  } else {
+    setListOpen(true);
+  }
+  render();
+});
+
+// The list opening narrows the map from the right: move the map just enough
+// that the clicked aircraft stays in sight.
+function keepInView(ac) {
+  const view = currentView();
+  const p = view.toScreen(ac.lat, ac.lon);
+  const m = KEEP_IN_VIEW_PX;
+  const dx = p.x > view.width - m ? p.x - (view.width - m) : p.x < m ? p.x - m : 0;
+  const dy = p.y > view.height - m ? p.y - (view.height - m) : p.y < m ? p.y - m : 0;
+  if (!dx && !dy) return;
+  state.view = { ...view.toLatLon(view.width / 2 + dx, view.height / 2 + dy), rangeKm: state.view.rangeKm };
+  settle();
 }
 
 function renderStatus() {
@@ -764,6 +828,8 @@ function select(ac) {
   state.info = undefined;
   state.track = undefined;
   state.photo = undefined;
+  renderListPanel(); // may narrow the map
+  keepInView(ac);
   render();
   lookup(ac.hex, ac.callsign).then((info) => {
     if (state.selected?.hex !== ac.hex) return; // another aircraft was chosen meanwhile
@@ -811,6 +877,7 @@ function renderSelected() {
 }
 
 function render() {
+  renderListPanel(); // first: it changes the map's size
   renderSelected();
   drawCanvas();
   renderHomeButtons();
@@ -860,9 +927,11 @@ document.addEventListener('keydown', (event) => {
 
 try {
   state.rainOn = localStorage.getItem(RAIN_KEY) !== 'off';
+  state.listOpen = localStorage.getItem(LIST_KEY) === 'open';
 } catch {
-  // On by default.
+  // Rain on and the list closed by default.
 }
+renderListPanel();
 loadRefresh();
 renderRain();
 renderLegend();

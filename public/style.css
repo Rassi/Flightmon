@@ -101,6 +101,8 @@ main {
 }
 
 main > * { min-width: 0; }
+/* The aircraft list closed: the map takes the whole width. */
+main.list-closed { grid-template-columns: minmax(0, 1fr); }
 
 .radar { position: relative; min-height: 0; }
 .radar canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
@@ -130,6 +132,16 @@ main > * { min-width: 0; }
   font-size: 20px;
   line-height: 1;
 }
+
+/* Top right of the map: opens and closes the aircraft list beside it. */
+.list-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--overlay);
+  font-variant-numeric: tabular-nums;
+}
+.list-toggle.error { border-color: var(--row-highlight); color: var(--row-highlight); }
 
 .legend, .attribution {
   padding: 6px 8px;
