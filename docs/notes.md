@@ -220,7 +220,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 13. Other map styles: Esri satellite (no key), Natural Earth outlines (no key)
 14. Route line on the radar towards the destination (adsbdb gives airport coordinates)
 15. **Auto-open nearby aircraft** (user, 2026-11-08): open the details card by itself for an aircraft closer than ~2 km to home and lower than ~3 km (both to be tuned). Questions for later: horizontal distance or 3D; don't replace a card the user opened; which one when several qualify (nearest?); open once per pass, not again on every update while it stays close; close again when it leaves? Data is all there (position, altitude, distance from home).
-16. **Rain warning for home** (user, 2026-11-08): say when rain is expected at home within the next ~2 hours. RainViewer has no forecast any more (`nowcast` empty since Jan 2026), so use Open-Meteo (already used for the weather, no key): `minutely_15=precipitation` (15-min steps; nowcast-quality only in some regions) or `hourly=precipitation,precipitation_probability`. Show e.g. "Rain from ~14:30" in the weather line; decide the threshold (mm / probability). Check what Open-Meteo gives for Copenhagen before building.
+16. **Rain warning for home** (user, 2026-11-08): say when rain is expected at home within the next ~2 hours. RainViewer has no forecast any more (`nowcast` empty since Jan 2026), so use Open-Meteo (already used for the weather, no key): `minutely_15=precipitation` (15-min steps; nowcast-quality only in some regions) or `hourly=precipitation,precipitation_probability`. Show e.g. "Rain from ~14:30" in the weather line; decide the threshold (mm / probability). Checked 2026-11-14 (dry afternoon, so all zeros): for Copenhagen `minutely_15=precipitation,precipitation_probability,rain,showers,snowfall&forecast_minutely_15=12` answers 12 steps (3 h) of all five, probability included; hourly gave 0.1 mm at 17:00 with 0% probability (amount and probability come from different models, so they can disagree). Can go in the existing weather request (no extra calls). Not yet seen with rain.
 
 **Need a key, payment, or checking first**
 - Aircraft photos from another source when Planespotters has none (e.g. Wikimedia Commons)
@@ -263,6 +263,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | planespotters checked from the user's machine and Chrome: works; terms read and noted. |
 | 2026-11-08 | Photo from Planespotters in the details card. Unit tests (`test/photo.test.js`); browser check `--only=details` passed with 4 warnings (Planespotters refuses headless Chromium); real photo checked in the user's Chrome. |
 | 2026-11-14 | ▶ plays the last hour of rain radar as a loop. Unit tests (`recentFrames`, `fetchFrames`, `rainReady`); browser check `rain` group: the order (−60 … −0, then again), each image drawn with its time (the synthetic tile left out of the oldest image), tiles of all 6 older images asked for, ■ back to the newest, Rain off stops it. `--only=rain` passed. |
+| 2026-11-14 | Open-Meteo's 15-minute precipitation for Copenhagen checked for the rain warning (backlog 16). |
 
 ## Open questions
 
