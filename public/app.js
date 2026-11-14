@@ -2,14 +2,15 @@ import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.j
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { fetchPhoto } from './photo.js';
-import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainReady } from './rain.js';
+import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainGridAt, rainReady } from './rain.js';
+import { PAIR_MIN, estimateMotion, forecastHome, warningText } from './nowcast.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
 import { delayMs, isRateLimited, nextBackoffS } from './polling.js';
 import { TrailRecorder, mergeTrail } from './trails.js';
 import { distanceKm } from './geo.js';
 import {
-  climbArrow, displayName, formatAltitude, formatDistance, formatSpeed,
+  climbArrow, compass, displayName, formatAltitude, formatDistance, formatSpeed,
 } from './format.js';
 
 const REFRESH_CHOICES_S = [5, 10, 30, 60, 120]; // the options in index.html
@@ -48,6 +49,7 @@ const els = {
   rainToggle: $('rain-toggle'),
   rainStatus: $('rain-status'),
   rainPlay: $('rain-play'),
+  rainWarning: $('rain-warning'),
   legend: $('legend'),
   details: $('details'),
   status: $('status'),
@@ -74,6 +76,8 @@ const state = {
   rainFrames: [], // the last hour's radar images, oldest first: [{ host, path, time }]
   rainPlaying: false, // looping through them
   rainShown: null, // time of the image shown while playing (null: the newest)
+  nowcast: null, // rain heading for home, from the radar (see runNowcast)
+  nowcastError: null,
   rainError: null,
   rainAt: 0,
 };
@@ -150,6 +154,10 @@ els.setHome.addEventListener('click', () => {
   saveView();
   if (state.data) state.data = fromHome(state.data); // distances from the new home
   loadWeather(); // and its weather and time zone
+  state.nowcast = null; // and its rain warning
+  state.nowcastError = null;
+  renderRain();
+  runNowcast();
   render();
 });
 
@@ -362,6 +370,35 @@ async function loadRain() {
   }
   renderRain();
   drawCanvas();
+  runNowcast();
+}
+
+// Rain heading for home: how the rain moved between the newest image and the
+// one PAIR_MIN earlier, carried on (nowcast.js). Again for each new image and
+// each new home.
+let nowcastKey = '';
+async function runNowcast() {
+  const frames = state.rainFrames;
+  const newer = frames.at(-1);
+  const older = frames.find((f) => f.time === newer?.time - PAIR_MIN * 60);
+  const home = { ...state.home };
+  const key = `${newer?.path} ${older?.path} ${home.lat},${home.lon}`;
+  if (!state.rainOn || !newer || !older || key === nowcastKey) return;
+  nowcastKey = key;
+  try {
+    const [a, b] = await Promise.all([rainGridAt(older, home), rainGridAt(newer, home)]);
+    if (key !== nowcastKey) return; // a newer image or home since
+    const motion = estimateMotion(a, b, PAIR_MIN);
+    state.nowcast = { ...forecastHome(b, motion, newer.time * 1000), motion, from: older.time, to: newer.time };
+    state.nowcastError = null;
+  } catch (err) {
+    if (key !== nowcastKey) return;
+    nowcastKey = ''; // try again with the next list
+    state.nowcast = null;
+    state.nowcastError = err.message;
+  }
+  renderRain();
+  drawCanvas();
 }
 
 // Weather and rain change slowly: refresh them when due, and not in a background tab.
@@ -382,6 +419,7 @@ function setRain(on) {
   renderRain();
   drawCanvas();
   refreshSlow();
+  if (on) runNowcast();
 }
 
 els.rainToggle.addEventListener('click', () => setRain(!state.rainOn));
@@ -469,8 +507,37 @@ function renderRain() {
   }
   els.rainStatus.textContent = text;
   els.rainStatus.classList.toggle('error', problem);
+  renderRainWarning();
   renderAttribution();
 }
+
+// The warning's wording depends on the time ("about now"), so it's also
+// redrawn every half minute.
+function renderRainWarning() {
+  const cast = state.rainOn && !isRainStale() ? state.nowcast : null;
+  const clock = (ms) => clockParts(new Date(ms), state.weather?.timeZone).time.slice(0, 5);
+  let text = warningText(cast, Date.now(), clock);
+  let title = '';
+  if (cast) {
+    const m = cast.motion;
+    title = `From the radar images ${clock(cast.from * 1000)}–${clock(cast.to * 1000)}: ` +
+      (m?.speedKmh ? `rain moving from ${compass(m.fromDeg)} at ${Math.round(m.speedKmh)} km/h.` +
+        (cast.startsAt || cast.endsAt ? '' : ` No change at home for ${cast.aheadMin} min after the newest image.`)
+        : m ? 'the rain is standing still.'
+          : 'no clear movement (little or no rain near home).') +
+      " Showers that form or fade on the way aren't foreseen.";
+  }
+  const unavailable = state.rainOn && !cast && state.nowcastError;
+  if (unavailable) {
+    text = 'No rain warning';
+    title = `Rain warning unavailable: ${state.nowcastError}`;
+  }
+  els.rainWarning.textContent = text;
+  els.rainWarning.title = title;
+  els.rainWarning.classList.toggle('unavailable', Boolean(unavailable));
+}
+
+const isRainStale = () => !newestRain() || Date.now() / 1000 - newestRain().time > RAIN_STALE_S;
 
 function renderAttribution() {
   const credits = [WEATHER_CREDIT];
@@ -501,6 +568,7 @@ function cssColors() {
     mapOpacity: Number(get('--map-opacity')) || 1,
     mapSaturation: Number(get('--map-saturation') || 1),
     rainOpacity: Number(get('--rain-opacity')) || 0.7,
+    rain: get('--rain-arrow'),
   };
 }
 
@@ -554,6 +622,7 @@ function drawCanvas() {
     rangeKm: state.view.rangeKm,
     highlight: new Set([state.highlight, state.selected?.hex].filter(Boolean)),
     trail: selectedTrail(),
+    rainArrow: state.rainOn && !isRainStale() && state.nowcast?.motion?.speedKmh ? state.nowcast.motion : null,
     colors,
     background: (c, view) => {
       drawBasemap(c, view, { dpr, opacity: colors.mapOpacity, saturation: colors.mapSaturation, dimColor: colors.halo, onLoad: queueDraw });
@@ -803,6 +872,7 @@ new ResizeObserver(() => {
   render();
 }).observe(els.canvas);
 setInterval(renderStatus, 1000);
+setInterval(renderRainWarning, 30 * 1000);
 // Tick just after each whole second, so the clock doesn't lag behind.
 (function tick() {
   renderClock();

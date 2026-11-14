@@ -68,7 +68,8 @@ export function hitTest(view, aircraft, x, y, maxPx = 18) {
 // `background(ctx, view)` draws the map tiles (and rain).
 // `highlight`: a Set of hex codes to draw white with a ring.
 // `trail`: points [{ lat, lon, altM, onGround }] flown by the selected aircraft.
-export function drawMap(ctx, { width, height, center, home = center, aircraft, rangeKm, highlight = new Set(), trail, colors, background }) {
+// `rainArrow`: { fromDeg, speedKmh }, how the rain around home moves (nowcast.js).
+export function drawMap(ctx, { width, height, center, home = center, aircraft, rangeKm, highlight = new Set(), trail, rainArrow, colors, background }) {
   ctx.clearRect(0, 0, width, height);
   const view = mapView(center, rangeKm, width, height, home.lat);
 
@@ -78,8 +79,9 @@ export function drawMap(ctx, { width, height, center, home = center, aircraft, r
   // The map's middle, when away from home: where "Set home" would put it.
   if (!centredOn(view, home)) drawCross(ctx, width / 2, height / 2, colors.muted, colors.halo);
 
-  // Home: a small dot.
+  // Home: a small dot, with the rain's movement as an arrow into it.
   const c = view.toScreen(home.lat, home.lon);
+  if (rainArrow && onMap(view, home)) drawRainArrow(ctx, c, rainArrow, colors.rain, colors.halo);
   ctx.beginPath();
   ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
   ctx.fillStyle = colors.accent;
@@ -121,6 +123,47 @@ function haloText(ctx, text, x, y, color, halo) {
   ctx.strokeText(text, x, y);
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
+}
+
+// An arrow coming into home from where the rain comes from, the speed at its
+// tail. A fixed size on screen, whatever the zoom: it shows a direction.
+const ARROW_TAIL_PX = 70;
+const ARROW_TIP_PX = 10;
+export function drawRainArrow(ctx, home, { fromDeg, speedKmh }, color, halo) {
+  const θ = (fromDeg * Math.PI) / 180;
+  const ux = Math.sin(θ); // towards where the rain comes from, north up
+  const uy = -Math.cos(θ);
+  const at = (d) => [home.x + ux * d, home.y + uy * d];
+  const [tx, ty] = at(ARROW_TAIL_PX);
+  const [hx, hy] = at(ARROW_TIP_PX);
+  const head = (side) => [hx + ux * 9 + uy * side * 6, hy + uy * 9 - ux * side * 6];
+  const path = () => {
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(hx, hy);
+    ctx.moveTo(...head(1));
+    ctx.lineTo(hx, hy);
+    ctx.lineTo(...head(-1));
+  };
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  path();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = halo;
+  ctx.stroke();
+  path();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.font = '600 11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // Beyond the tail, clear of it whichever way the arrow points.
+  const label = `${Math.round(speedKmh)} km/h`;
+  const [lx, ly] = at(ARROW_TAIL_PX + 6 + Math.abs(ux) * ctx.measureText(label).width / 2 + Math.abs(uy) * 7);
+  haloText(ctx, label, lx, ly, color, halo);
+  ctx.restore();
 }
 
 function drawCross(ctx, x, y, color, halo) {

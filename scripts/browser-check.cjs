@@ -23,7 +23,8 @@
 // highlight, the map remembered in the browser, Home, feed failure, back-off
 // after a 429, zoom-out cap, never two aircraft requests within 5 s, no console
 // errors; clock in Copenhagen's time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
-// exactly (checked with a synthetic tile), the rain on/off switch and the last hour played as a loop. Screenshots go to the
+// exactly (checked with a synthetic tile), the rain on/off switch, the last hour played as a loop, and the
+// rain warning and arrow for a synthetic shower moving towards home. Screenshots go to the
 // given directory (default: the system temp dir); look at them too: a tile
 // server can answer 200 with a placeholder image.
 
@@ -419,8 +420,10 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const frameTime = frame && new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(frame.time * 1000));
     check(status.startsWith(`Radar ${frameTime}`), `status shows the image time: "${status}"`);
     const zooms = [...new Set(rainTiles.map((t) => Number(t.url.match(/\/512\/(\d+)\//)?.[1])))];
-    const bad = rainTiles.filter((t) => t.status !== 200 || t.type !== 'image/png' || !t.url.includes(frame?.path));
-    check(rainTiles.length > 0 && bad.length === 0 && zooms.every((z) => z <= 7), `${rainTiles.length} rain tiles of the latest image, 512 px at zoom ${zooms.join(',')} (≤ 7), all PNG` + (bad.length ? ' — bad: ' + bad.slice(0, 3).map((t) => `${t.status} ${t.url}`).join('; ') : ''));
+    // The overlay's, and the nowcast's of the newest image and the one 20 min before.
+    const pair = list?.radar?.past?.find((f) => f.time === frame?.time - 1200);
+    const bad = rainTiles.filter((t) => t.status !== 200 || t.type !== 'image/png' || ![frame?.path, pair?.path].some((p) => p && t.url.includes(p + '/')));
+    check(rainTiles.length > 0 && bad.length === 0 && zooms.every((z) => z <= 7), `${rainTiles.length} rain tiles of the latest image and the one 20 min before, 512 px at zoom ${zooms.join(',')} (≤ 7), all PNG` + (bad.length ? ' — bad: ' + bad.slice(0, 3).map((t) => `${t.status} ${t.url}`).join('; ') : ''));
     const links = await page.$$eval('#attribution a', (as) => as.map((a) => a.href));
     check(links.includes('https://open-meteo.com/') && links.includes('https://www.rainviewer.com/'), 'Open-Meteo and RainViewer credited with links');
 
@@ -550,8 +553,11 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
       `plays ${want.map((m) => '−' + m).join(', ')} then starts over: saw ${seq.map((m) => '−' + m).join(', ')}`);
     const wrong = shots.filter((s) => !near(s.px, ins.map((i) => (ago(s.status) === want[0] ? off : on)[i])));
     check(wrong.length === 0, `each image drawn with its time (no magenta only at −${want[0]} min): ${shots.length - wrong.length}/${shots.length} samples` + (wrong.length ? ` — e.g. "${wrong[0].status}"` : ''));
-    const paths = new Set(rpTiles.slice(tilesBefore).map((u) => u.match(/\/v2\/radar\/[^/]+/)?.[0]));
-    check(hour.slice(0, -1).every((f) => paths.has(f.path)), `tiles asked for the ${hour.length - 1} older images`);
+    // Over the whole visit: the nowcast has already fetched the image 20 min
+    // back, which the loop then gets from the browser's cache.
+    const paths = new Set(rpTiles.map((u) => u.match(/\/v2\/radar\/[^/]+/)?.[0]));
+    const fresh = new Set(rpTiles.slice(tilesBefore).map((u) => u.match(/\/v2\/radar\/[^/]+/)?.[0]));
+    check(hour.slice(0, -1).every((f) => paths.has(f.path)) && fresh.size >= hour.length - 2, `tiles asked for the ${hour.length - 1} older images (${fresh.size} of them after ▶)`);
     check(await rp.$eval('#rain-play', (b) => b.textContent === '■' && b.getAttribute('aria-pressed') === 'true'), 'playing: the button shows ■');
     await rp.click('#rain-play');
     const stopped = await rp.textContent('#rain-status');
@@ -563,6 +569,67 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     check(!(await rp.isVisible('#rain-play')) && (await rp.getAttribute('#rain-play', 'aria-pressed')) === 'false', 'Rain off while playing: loop stops, ▶ hidden');
     await rp.click('#rain-toggle');
     await rp.close();
+
+    // Rain heading for home (the nowcast): a page whose radar shows one round
+    // shower, 15 km across the radius, that moves east at 60 km/h and is 50 km
+    // west of home in the newest image. Its edge (35 km out) should reach home
+    // about 34 min after that image, and the arrow come into home from the west.
+    {
+      const np = await context.newPage();
+      let npList = null;
+      np.on('response', (r) => { if (r.url().startsWith('https://api.rainviewer.com/')) npList = r.json().catch(() => null); });
+      const SPEED = 60, AT_NEWEST = 50, R = 15;
+      await np.route('https://tilecache.rainviewer.com/**', async (route) => {
+        const url = route.request().url();
+        const [, z, x, y] = url.match(/\/512\/(\d+)\/(\d+)\/(\d+)\//).map(Number);
+        const past = (npList ? await npList : null)?.radar?.past ?? [];
+        const f = past.find((f) => url.includes(f.path + '/'));
+        const ago = f ? (past.at(-1).time - f.time) / 60 : 0;
+        const world = 2 ** z * 512;
+        const kmPerPx = 2 * Math.PI * 6378.137 * Math.cos(center.lat * Math.PI / 180) / world;
+        const h = merc(center.lat, center.lon);
+        const cx = h.x * world - (AT_NEWEST + SPEED * ago / 60) / kmPerPx - x * 512;
+        const cy = h.y * world - y * 512;
+        const body = Buffer.from(await page.evaluate(([cx, cy, r]) => {
+          const c = document.createElement('canvas'); c.width = c.height = 512;
+          const g = c.getContext('2d'); g.fillStyle = 'rgb(0,145,202)';
+          g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+          return c.toDataURL('image/png').split(',')[1];
+        }, [cx, cy, R / kmPerPx]), 'base64');
+        route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body });
+      });
+      await np.route('https://api.open-meteo.com/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: recordedWeather }));
+      await np.route('**/api/aircraft*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ now: Date.now(), source: 'test', center: { ...center, radiusKm: 50 }, aircraft: [] }) }));
+      await np.goto(BASE + '/');
+      await np.waitForFunction(() => document.getElementById('rain-warning').title, null, { timeout: 20000 }).catch(() => {});
+      await np.waitForTimeout(500);
+      const newest = (await npList).radar.past.at(-1).time * 1000;
+      const text = await np.textContent('#rain-warning');
+      const title = await np.getAttribute('#rain-warning', 'title');
+      const hhmm = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+      const expect = newest + 34 * 60000;
+      const ok = [-2, -1, 0, 1, 2].map((k) => `Rain at home from ~${hhmm(Math.round(expect / 300000) * 300000 + k * 300000)}`);
+      check(expect - Date.now() < 150000 ? text === 'Rain at home about now' : ok.slice(1, 4).includes(text),
+        `warning: "${text}" (shower due about ${hhmm(expect)}, newest image ${hhmm(newest)})`);
+      const speed = Number(title?.match(/from W at (\d+) km\/h/)?.[1]);
+      check(speed >= 56 && speed <= 64, `tooltip: "${title}"`);
+      // The arrow: its shaft runs from 10 to 70 px west of home.
+      const arrowPx = () => np.evaluate(() => {
+        const c = document.getElementById('radar'); const d = devicePixelRatio;
+        const x = (c.clientWidth / 2 - 40) * d, y = (c.clientHeight / 2) * d;
+        return Array.from(c.getContext('2d').getImageData(Math.round(x), Math.round(y), 1, 1).data.slice(0, 3));
+      });
+      const blue = hexToRgb('#4fc3ff');
+      const px = await arrowPx();
+      check(px.every((v, k) => Math.abs(v - blue[k]) <= 12), `arrow into home from the west, ${speed} km/h (pixel ${px} on its shaft)`);
+      await np.screenshot({ path: OUT + '/rain-nowcast.png' });
+      await np.click('#rain-toggle');
+      await np.waitForTimeout(300);
+      const pxOff = await arrowPx();
+      check((await np.textContent('#rain-warning')) === '' && !pxOff.every((v, k) => Math.abs(v - blue[k]) <= 12), 'Rain off: no warning, no arrow');
+      await np.evaluate(() => localStorage.setItem('flightmon.rain', 'on'));
+      await np.close();
+    }
     // Leave the setting as found for the rest of the run (on).
   }
 

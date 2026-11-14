@@ -18,6 +18,8 @@
   --map-saturation: 0.3;
   /* How strongly the rain radar covers the map. */
   --rain-opacity: 0.7;
+  /* The arrow showing how the rain around home moves. */
+  --rain-arrow: #4fc3ff;
   /* Behind the controls and credits that sit on the map. */
   --overlay: rgba(11, 20, 22, 0.82);
 }
@@ -162,6 +164,10 @@ main > * { min-width: 0; }
 .play { width: 2.4em; padding-left: 0; padding-right: 0; }
 .play[aria-pressed="true"] { border-color: var(--accent); background: #15302a; color: var(--text); }
 .rain-status.error { color: var(--row-highlight); }
+/* Rain heading for home (or there now), from the radar. */
+.rain-warning { color: var(--row-highlight); font-size: 13px; font-weight: 600; }
+.rain-warning:empty { display: none; }
+.rain-warning.unavailable { color: var(--muted); font-weight: 400; font-size: 12px; }
 
 .attribution {
   margin: 0;
