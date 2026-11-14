@@ -155,7 +155,12 @@ main > * { min-width: 0; }
 
 /* The rain button and its image time, in the header. */
 .rain { display: flex; align-items: center; gap: 8px; }
-.rain-status { color: var(--muted); font-size: 12px; }
+.rain-status { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* Room for "Radar 13:20 (−40 min)" while playing, so the header holds still. */
+.play[aria-pressed="true"] + .rain-status { min-width: 11em; }
+/* Plays the last hour as a loop; a fixed width so ▶ and ■ don't shift the header. */
+.play { width: 2.4em; padding-left: 0; padding-right: 0; }
+.play[aria-pressed="true"] { border-color: var(--accent); background: #15302a; color: var(--text); }
 .rain-status.error { color: var(--row-highlight); }
 
 .attribution {

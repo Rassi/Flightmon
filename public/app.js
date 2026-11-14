@@ -2,7 +2,7 @@ import { GROUND_COLOR, STOPS, altitudeColor, legendGradient } from './altitude.j
 import { ATTRIBUTION, drawBasemap } from './basemap.js';
 import { lookup, renderDetails } from './details.js';
 import { fetchPhoto } from './photo.js';
-import { RAIN_CREDIT, drawRain, fetchFrame } from './rain.js';
+import { PLAY_MINUTES, RAIN_CREDIT, drawRain, fetchFrames, rainReady } from './rain.js';
 import { WEATHER_CREDIT, clockParts, fetchWeather, weatherLines } from './weather.js';
 import { centredOn, cornerRangeKm, drawMap, hitTest, mapView, maxRangeKm, onMap, rangeAtLat } from './radar.js';
 import { delayMs, isRateLimited, nextBackoffS } from './polling.js';
@@ -27,6 +27,9 @@ const RAIN_KEY = 'flightmon.rain';
 const WEATHER_REFRESH_MS = 15 * 60 * 1000; // Open-Meteo's current values change every 15 min
 const RAIN_REFRESH_MS = 5 * 60 * 1000; // a new radar image every 10 min
 const RAIN_STALE_S = 30 * 60;
+const RAIN_STEP_MS = 500; // each image of the loop
+const RAIN_HOLD_MS = 1500; // the newest, before starting over
+const RAIN_WAIT_MS = 100; // checking again for an image's tiles
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -44,6 +47,7 @@ const els = {
   refreshNow: $('refresh-now'),
   rainToggle: $('rain-toggle'),
   rainStatus: $('rain-status'),
+  rainPlay: $('rain-play'),
   legend: $('legend'),
   details: $('details'),
   status: $('status'),
@@ -67,7 +71,9 @@ const state = {
   weatherError: null,
   weatherAt: 0, // when it was last asked for
   rainOn: true,
-  rainFrame: null, // the latest radar image: { host, path, time }
+  rainFrames: [], // the last hour's radar images, oldest first: [{ host, path, time }]
+  rainPlaying: false, // looping through them
+  rainShown: null, // time of the image shown while playing (null: the newest)
   rainError: null,
   rainAt: 0,
 };
@@ -349,7 +355,7 @@ async function loadWeather() {
 async function loadRain() {
   state.rainAt = Date.now();
   try {
-    state.rainFrame = await fetchFrame();
+    state.rainFrames = await fetchFrames();
     state.rainError = null;
   } catch (err) {
     state.rainError = err.message;
@@ -367,6 +373,7 @@ function refreshSlow() {
 
 function setRain(on) {
   state.rainOn = on;
+  if (!on) playRain(false);
   try {
     localStorage.setItem(RAIN_KEY, on ? 'on' : 'off');
   } catch {
@@ -378,6 +385,37 @@ function setRain(on) {
 }
 
 els.rainToggle.addEventListener('click', () => setRain(!state.rainOn));
+els.rainPlay.addEventListener('click', () => playRain(!state.rainPlaying));
+
+const newestRain = () => state.rainFrames.at(-1) ?? null;
+const shownRain = () => state.rainFrames.find((f) => f.time === state.rainShown) ?? newestRain();
+
+// The loop: oldest to newest, a pause on the newest, again. An image is shown
+// only once all its tiles are in (for wherever the map is by then), so a slow
+// tile holds the loop rather than leaving a hole. Stopping goes back to the newest.
+let rainTimer = null;
+function playRain(on) {
+  clearTimeout(rainTimer);
+  state.rainPlaying = on;
+  state.rainShown = null;
+  if (on) stepRain();
+  renderRain();
+  drawCanvas();
+}
+
+function stepRain() {
+  const frames = state.rainFrames;
+  if (!state.rainPlaying || !frames.length) return;
+  const next = frames[(frames.findIndex((f) => f.time === state.rainShown) + 1) % frames.length];
+  if (!lastView || !rainReady(lastView, next, { dpr: window.devicePixelRatio || 1, onLoad: queueDraw })) {
+    rainTimer = setTimeout(stepRain, RAIN_WAIT_MS);
+    return;
+  }
+  state.rainShown = next.time;
+  renderRain();
+  drawCanvas();
+  rainTimer = setTimeout(stepRain, next === newestRain() ? RAIN_HOLD_MS : RAIN_STEP_MS);
+}
 
 // The time at home (once the weather has told us its time
 // zone; the browser's until then), and UTC as aviation uses it.
@@ -407,13 +445,20 @@ function renderWeather() {
 function renderRain() {
   els.rainToggle.setAttribute('aria-pressed', String(state.rainOn));
   els.rainToggle.title = state.rainOn ? 'Hide the rain radar' : 'Show the rain radar';
+  els.rainPlay.hidden = !state.rainOn || state.rainFrames.length < 2;
+  els.rainPlay.textContent = state.rainPlaying ? '■' : '▶';
+  els.rainPlay.setAttribute('aria-pressed', String(state.rainPlaying));
+  els.rainPlay.title = state.rainPlaying ? 'Stop (back to the newest image)' : `Play the last ${PLAY_MINUTES} min of rain radar`;
   let text = '';
   let problem = false;
   if (state.rainOn) {
-    if (state.rainFrame) {
-      const { time } = clockParts(new Date(state.rainFrame.time * 1000), state.weather?.timeZone);
+    const frame = shownRain();
+    if (frame) {
+      const { time } = clockParts(new Date(frame.time * 1000), state.weather?.timeZone);
       text = `Radar ${time.slice(0, 5)}`;
-      problem = Date.now() / 1000 - state.rainFrame.time > RAIN_STALE_S;
+      const ago = Math.round((newestRain().time - frame.time) / 60);
+      if (ago > 0) text += ` (−${ago} min)`;
+      problem = Date.now() / 1000 - newestRain().time > RAIN_STALE_S;
       if (state.rainError) text += ` (update failed: ${state.rainError})`;
     } else if (state.rainError) {
       text = `Unavailable: ${state.rainError}`;
@@ -512,8 +557,8 @@ function drawCanvas() {
     colors,
     background: (c, view) => {
       drawBasemap(c, view, { dpr, opacity: colors.mapOpacity, saturation: colors.mapSaturation, dimColor: colors.halo, onLoad: queueDraw });
-      if (state.rainOn && state.rainFrame) {
-        drawRain(c, view, state.rainFrame, { dpr, opacity: colors.rainOpacity, onLoad: queueDraw });
+      if (state.rainOn && shownRain()) {
+        drawRain(c, view, shownRain(), { dpr, opacity: colors.rainOpacity, onLoad: queueDraw });
       }
     },
   });

@@ -44,26 +44,43 @@ const CHILD_LEVELS = 2; // how far in to look for sharper ones (from before zoom
 // or zooming doesn't flash the background; `onLoad` is called as each arrives,
 // so the caller can redraw.
 export function drawTiles(ctx, view, z, url, cache, onLoad) {
+  const address = wrapped(url);
+  for (const [tx, ty] of tilesInView(view, z)) {
+    const img = cache.get(address(z, tx, ty), onLoad);
+    if (img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, ...screenRect(view, z, tx, ty));
+      continue;
+    }
+    drawCoarser(ctx, view, z, tx, ty, address, cache);
+    drawSharper(ctx, view, z, tx, ty, address, cache);
+  }
+}
+
+// Starts loading the zoom-`z` tiles covering the view; true once every one has
+// finished (loaded or failed), so it can be shown without gaps.
+export function tilesReady(view, z, url, cache, onLoad) {
+  const address = wrapped(url);
+  let ready = true;
+  for (const [tx, ty] of tilesInView(view, z)) {
+    if (!cache.get(address(z, tx, ty), onLoad).complete) ready = false;
+  }
+  return ready;
+}
+
+// [tx, ty] of the zoom-z tiles the view shows (tx may run past the date line).
+function tilesInView(view, z) {
   const n = 2 ** z;
   const size = view.worldSize / n; // a tile's size on screen, in CSS pixels
   const x0 = Math.floor(view.originX / size);
   const x1 = Math.floor((view.originX + view.width) / size);
   const y0 = Math.max(0, Math.floor(view.originY / size));
   const y1 = Math.min(n - 1, Math.floor((view.originY + view.height) / size));
-  const address = (z2, tx, ty) => url(z2, ((tx % 2 ** z2) + 2 ** z2) % 2 ** z2, ty);
-
-  for (let ty = y0; ty <= y1; ty++) {
-    for (let tx = x0; tx <= x1; tx++) {
-      const img = cache.get(address(z, tx, ty), onLoad);
-      if (img.complete && img.naturalWidth > 0) {
-        ctx.drawImage(img, ...screenRect(view, z, tx, ty));
-        continue;
-      }
-      drawCoarser(ctx, view, z, tx, ty, address, cache);
-      drawSharper(ctx, view, z, tx, ty, address, cache);
-    }
-  }
+  const tiles = [];
+  for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) tiles.push([tx, ty]);
+  return tiles;
 }
+
+const wrapped = (url) => (z, tx, ty) => url(z, ((tx % 2 ** z) + 2 ** z) % 2 ** z, ty);
 
 // Where tile (tx, ty) of zoom z goes, snapped to whole pixels so neighbouring
 // tiles don't show hairline gaps: [left, top, width, height].

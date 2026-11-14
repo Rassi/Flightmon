@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { FRAMES_URL, drawRain, fetchFrame, latestFrame, rainTileUrl, rainZoom } from '../public/rain.js';
+import { FRAMES_URL, drawRain, fetchFrames, latestFrame, rainReady, rainTileUrl, rainZoom, recentFrames } from '../public/rain.js';
 import { makeView, worldPixel } from '../public/mercator.js';
 
 // RainViewer's list of radar images, 2026-10-31.
@@ -14,15 +14,26 @@ test('the newest radar image', () => {
   assert.equal(latestFrame({}), null);
 });
 
-test('fetchFrame', async () => {
+test('the last hour: 7 images 10 min apart, oldest first, ending with the newest', () => {
+  const frames = recentFrames(body);
+  assert.equal(body.radar.past.length, 13); // the list has two hours
+  assert.deepEqual(frames.map((f) => (f.time - 1793458200) / 60), [-60, -50, -40, -30, -20, -10, 0]);
+  assert.deepEqual(frames.at(-1), latestFrame(body));
+  assert.ok(frames.every((f) => f.host === 'https://tilecache.rainviewer.com' && f.path.startsWith('/v2/radar/')));
+  assert.equal(recentFrames(body, 20).length, 3);
+  assert.deepEqual(recentFrames({ host: 'h', radar: { past: [] } }), []);
+});
+
+test('fetchFrames', async () => {
   let asked;
-  const frame = await fetchFrame(async (url) => { asked = url; return new Response(JSON.stringify(body)); });
+  const frames = await fetchFrames(async (url) => { asked = url; return new Response(JSON.stringify(body)); });
   assert.equal(asked, FRAMES_URL);
-  assert.equal(frame.time, 1793458200);
-  await assert.rejects(fetchFrame(async () => new Response('', { status: 429 })), /HTTP 429/);
+  assert.equal(frames.length, 7);
+  assert.equal(frames.at(-1).time, 1793458200);
+  await assert.rejects(fetchFrames(async () => new Response('', { status: 429 })), /HTTP 429/);
   const timeout = Object.assign(new Error('signal timed out'), { name: 'TimeoutError' });
-  await assert.rejects(fetchFrame(async () => { throw timeout; }), /RainViewer didn't answer within 8 s/);
-  await assert.rejects(fetchFrame(async () => new Response('{"radar":{"past":[]}}')), /no radar images/);
+  await assert.rejects(fetchFrames(async () => { throw timeout; }), /RainViewer didn't answer within 8 s/);
+  await assert.rejects(fetchFrames(async () => new Response('{"radar":{"past":[]}}')), /no radar images/);
 });
 
 test('tile address: 512 px, z/x/y, the one colour scheme, smoothed, with snow', () => {
@@ -80,4 +91,21 @@ test('tiles go on a layer of their own, which is drawn over the map once, transl
   assert.equal(drawn.length, 1);
   assert.deepEqual({ ...drawn[0], img: undefined }, { img: undefined, x: 0, y: 0, w: 900, h: 900, alpha: 0.7 });
   assert.equal(drawn[0].img.width, 1800);
+});
+
+test('an image is ready once all its tiles for the view have finished, loaded or failed', () => {
+  const made = [];
+  globalThis.Image = class {
+    constructor() { made.push(this); this.complete = false; this.naturalWidth = 0; }
+  };
+  const view = makeView(CPH, 50, 400, 900, 900);
+  const frame = recentFrames(body)[0];
+  assert.equal(rainReady(view, frame, { dpr: 2, onLoad: () => {} }), false);
+  const mine = made.filter((img) => img.src.includes(frame.path));
+  assert.ok(mine.length > 0 && mine.length === made.length, "asks for that image's tiles only");
+  mine.slice(1).forEach((img) => { img.complete = true; img.naturalWidth = 512; });
+  assert.equal(rainReady(view, frame, { dpr: 2, onLoad: () => {} }), false);
+  mine[0].complete = true; // failed: complete, no pixels; don't wait for it forever
+  assert.equal(rainReady(view, frame, { dpr: 2, onLoad: () => {} }), true);
+  assert.equal(made.length, mine.length, 'no new requests once asked');
 });

@@ -53,6 +53,7 @@ decided (with the date), in the same commit as the change it belongs to:
 | 2026-11-08 | A ↻ button next to the Refresh menu fetches at once, keeping recorded paths and the open details (F5 or "Show" would clear them); the next automatic update comes a full interval later. |
 | 2026-11-08 | Browser check: the user asked not to run every check every time, to avoid the feeds' 429s; feeds refusing with 429 is a warning (user's choice), any other failure still fails. |
 | 2026-11-08 | First visit with no location shows Copenhagen at 50 km (user chose this over asking for the browser's location or a clearer message). The default isn't saved or put in the URL until the user picks a place. |
+| 2026-11-14 | **Rain loop** (user asked to animate the last hour to see where the rain is heading; suggested a play button next to Rain): a **▶** button beside Rain (hidden while rain is off) plays RainViewer's images of the last 60 min (7, 10 min apart), oldest first, 0.5 s each and 1.5 s on the newest, then starts over until **■** is pressed, which goes back to the newest. The status shows each image's time and its age, "Radar 13:20 (−30 min)". An image is shown only once all its tiles for the current view are in (failed ones count as in), so a slow tile holds the loop instead of leaving a hole; panning and zooming while it plays work. Switching rain off stops it. Not done: pausing on one image, a slider, the full 2 h, speed choice. |
 
 ## Data sources: what we found
 
@@ -200,13 +201,13 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 - Click a plane for details, with route and airframe from adsbdb, and a photo from Planespotters
 - Path flown by the selected aircraft (recorded since page open, plus OpenSky's history)
 - Clock (home's time + UTC) and weather (Open-Meteo, at home) in the header
-- Rain radar overlay (RainViewer), switchable from the header
+- Rain radar overlay (RainViewer), switchable from the header; ▶ plays the last hour as a loop
 
 **Candidates: fit a laptop browser, no key**
 0. Fewer labels when zoomed out: fully zoomed out (2026-11-08) the labels around Copenhagen pile up unreadably; e.g. label only the selected/hovered aircraft, or skip labels that would overlap.
 1. Military / twin-engine icon variants (need a type database, e.g. ICAO Doc 8643 descriptions; check licence)
 2. Altitude / speed filters; zoom with mouse wheel or keys
-3. Air quality (Open-Meteo); a short forecast; rain radar animation (the list has 2 h of images)
+3. Air quality (Open-Meteo); a short forecast; ~~rain radar animation~~ done (last hour; the list has 2 h if wanted)
 4. Aircraft just outside the range shown on the rim
 5. Tag options: flight number / callsign / registration; leader lines
 6. Animated radar sweep (left out of the minimal start on purpose)
@@ -261,6 +262,7 @@ From FlightScnr_Pi's feature list, sorted by how well they fit Flightmon.
 | 2026-11-08 | + / − zoom buttons, lower left above the credits. Browser check (map group): position, ×2 out with the middle unchanged, stop and greyed out at the cap, ×½ in. `--only=map` passed. |
 | 2026-11-08 | planespotters checked from the user's machine and Chrome: works; terms read and noted. |
 | 2026-11-08 | Photo from Planespotters in the details card. Unit tests (`test/photo.test.js`); browser check `--only=details` passed with 4 warnings (Planespotters refuses headless Chromium); real photo checked in the user's Chrome. |
+| 2026-11-14 | ▶ plays the last hour of rain radar as a loop. Unit tests (`recentFrames`, `fetchFrames`, `rainReady`); browser check `rain` group: the order (−60 … −0, then again), each image drawn with its time (the synthetic tile left out of the oldest image), tiles of all 6 older images asked for, ■ back to the newest, Rain off stops it. `--only=rain` passed. |
 
 ## Open questions
 

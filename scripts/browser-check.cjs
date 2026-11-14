@@ -23,7 +23,7 @@
 // highlight, the map remembered in the browser, Home, feed failure, back-off
 // after a 429, zoom-out cap, never two aircraft requests within 5 s, no console
 // errors; clock in Copenhagen's time zone, weather as Open-Meteo answered, rain radar tiles (z ≤ 7) placed
-// exactly (checked with a synthetic tile) and the rain on/off switch. Screenshots go to the
+// exactly (checked with a synthetic tile), the rain on/off switch and the last hour played as a loop. Screenshots go to the
 // given directory (default: the system temp dir); look at them too: a tile
 // server can answer 200 with a placeholder image.
 
@@ -436,8 +436,20 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const asked = [];
     const rp = await context.newPage();
     let mark = null; // [z, x, y] of the magenta tile
-    await rp.route('https://tilecache.rainviewer.com/**', (route) => {
-      const [, z, x, y] = route.request().url().match(/\/512\/(\d+)\/(\d+)\/(\d+)\//).map(Number);
+    // The loop's oldest image (an hour before the newest) gets no magenta, so
+    // the loop can be seen drawing the image its time says.
+    let rpList = null; const rpTiles = [];
+    rp.on('response', (r) => { if (r.url().startsWith('https://api.rainviewer.com/')) rpList = r.json().catch(() => null); });
+    const lastHour = (l) => { const past = l?.radar?.past ?? []; return past.filter((f) => f.time >= past.at(-1).time - 3600); };
+    await rp.route('https://tilecache.rainviewer.com/**', async (route) => {
+      const url = route.request().url();
+      rpTiles.push(url);
+      const [, z, x, y] = url.match(/\/512\/(\d+)\/(\d+)\/(\d+)\//).map(Number);
+      const oldest = lastHour(rpList ? await rpList : null)[0]?.path;
+      if (oldest && url.includes(oldest + '/')) {
+        route.fulfill({ status: 200, contentType: 'image/png', headers: { 'access-control-allow-origin': '*' }, body: clear });
+        return;
+      }
       asked.push([z, x, y]);
       const n = 2 ** z;
       const cx = Math.floor((center.lon + 180) / 360 * n);
@@ -511,6 +523,45 @@ const check = (ok, msg) => { console.log(ok ? '  ✓' : '  ✗', msg); if (!ok) 
     const again = await sample();
     check(again.every((c, i) => c.every((v, k) => Math.abs(v - on[i][k]) <= 2)), 'switched on again: drawn as before');
     await rp.screenshot({ path: OUT + '/rain-synthetic.png' });
+
+    // ▶ plays the last hour: oldest to newest, the time beside it, each image
+    // drawn with its time; ■ goes back to the newest.
+    const hour = lastHour(await rpList);
+    check(await rp.isVisible('#rain-play') && (await rp.textContent('#rain-play')) === '▶', `▶ next to Rain (${hour.length} images in the last hour)`);
+    const tilesBefore = rpTiles.length;
+    const ins = pts.map((p, i) => (p.inside ? i : -1)).filter((i) => i >= 0).slice(0, 12);
+    const near = (a, b) => a.every((c, j) => c.every((v, k) => Math.abs(v - b[j][k]) <= 2));
+    await rp.click('#rain-play');
+    const shots = [];
+    for (let t = 0; t < 70; t++) {
+      shots.push(await rp.evaluate((ps) => {
+        const ctx = document.getElementById('radar').getContext('2d'); const dpr = devicePixelRatio;
+        return { status: document.getElementById('rain-status').textContent,
+          px: ps.map((p) => Array.from(ctx.getImageData(Math.round(p.x * dpr), Math.round(p.y * dpr), 1, 1).data.slice(0, 3))) };
+      }, ins.map((i) => pts[i])));
+      if (t === 20) await rp.screenshot({ path: OUT + '/rain-playing.png', clip: { x: 0, y: 0, width: 1440, height: 70 } });
+      await rp.waitForTimeout(100);
+    }
+    const ago = (st) => Number(st.match(/\(−(\d+) min\)/)?.[1] ?? 0);
+    const seq = shots.map((s) => ago(s.status)).filter((m, i, a) => i === 0 || m !== a[i - 1]);
+    while (seq[0] === 0) seq.shift(); // the newest, until the oldest's tiles are in
+    const want = hour.map((f) => Math.round((hour.at(-1).time - f.time) / 60));
+    check(want.length === 7 && want.every((m, i) => seq[i] === m) && seq[want.length] === want[0],
+      `plays ${want.map((m) => '−' + m).join(', ')} then starts over: saw ${seq.map((m) => '−' + m).join(', ')}`);
+    const wrong = shots.filter((s) => !near(s.px, ins.map((i) => (ago(s.status) === want[0] ? off : on)[i])));
+    check(wrong.length === 0, `each image drawn with its time (no magenta only at −${want[0]} min): ${shots.length - wrong.length}/${shots.length} samples` + (wrong.length ? ` — e.g. "${wrong[0].status}"` : ''));
+    const paths = new Set(rpTiles.slice(tilesBefore).map((u) => u.match(/\/v2\/radar\/[^/]+/)?.[0]));
+    check(hour.slice(0, -1).every((f) => paths.has(f.path)), `tiles asked for the ${hour.length - 1} older images`);
+    check(await rp.$eval('#rain-play', (b) => b.textContent === '■' && b.getAttribute('aria-pressed') === 'true'), 'playing: the button shows ■');
+    await rp.click('#rain-play');
+    const stopped = await rp.textContent('#rain-status');
+    check(stopped === `Radar ${new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(hour.at(-1).time * 1000))}`
+      && (await rp.textContent('#rain-play')) === '▶' && near(await sample(), on), `■ stops at the newest image: "${stopped}"`);
+    await rp.click('#rain-play');
+    await rp.waitForTimeout(1500);
+    await rp.click('#rain-toggle');
+    check(!(await rp.isVisible('#rain-play')) && (await rp.getAttribute('#rain-play', 'aria-pressed')) === 'false', 'Rain off while playing: loop stops, ▶ hidden');
+    await rp.click('#rain-toggle');
     await rp.close();
     // Leave the setting as found for the rest of the run (on).
   }
